@@ -1,4 +1,4 @@
-// authController.js
+// controllers/authController.js
 import express from 'express';
 import bcrypt from 'bcrypt';
 import pool from '../config/db.js';
@@ -26,11 +26,7 @@ router.post('/signup', async (req, res) => {
     }
 
     // Check if email already exists
-    const userCheck = await pool.query(
-      'SELECT * FROM users WHERE email = $1',
-      [email]
-    );
-
+    const userCheck = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     if (userCheck.rows.length > 0) {
       return res.status(400).json({ message: 'Email already exists' });
     }
@@ -38,12 +34,12 @@ router.post('/signup', async (req, res) => {
     // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Insert user into database
+    // Insert user
     const newUser = await pool.query(
       `INSERT INTO users 
-        (name, email, password_hash, role, age, gender, occupation, work_hours_per_day, academic_hours_per_day)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, name, email, role, age, gender, occupation`,
+      (name, email, password_hash, role, age, gender, occupation, work_hours_per_day, academic_hours_per_day)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING id, name, email, role, age, gender, occupation`,
       [name, email, hashedPassword, role, age, gender, occupation, work_hours_per_day, academic_hours_per_day]
     );
 
