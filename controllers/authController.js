@@ -1,27 +1,58 @@
-import pool from '../config/db.js';
+// authController.js
+import express from 'express';
 import bcrypt from 'bcrypt';
+import pool from './db.js';
 
-export const signUp = async (req, res) => {
-  const { fullName, email, username, password } = req.body;
+const router = express.Router();
 
-  if (!fullName || !email || !password) {
-    return res.status(400).json({ message: 'Missing required fields' });
-  }
-
+// Signup endpoint
+router.post('/signup', async (req, res) => {
   try {
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const {
+      name,
+      email,
+      password,
+      role,
+      age = null,
+      gender = null,
+      occupation = null,
+      work_hours_per_day = null,
+      academic_hours_per_day = null
+    } = req.body;
 
-    const result = await pool.query(
-      'INSERT INTO users (full_name, email, username, password_hash) VALUES ($1, $2, $3, $4) RETURNING id, full_name, email, username',
-      [fullName, email, username, hashedPassword]
+    // Validate required fields
+    if (!name || !email || !password || !role) {
+      return res.status(400).json({ message: 'Name, email, password, and role are required' });
+    }
+
+    // Check if email already exists
+    const userCheck = await pool.query(
+      'SELECT * FROM users WHERE email = $1',
+      [email]
     );
 
-    res.status(201).json({ user: result.rows[0] });
-  } catch (err) {
-    console.error(err);
-    if (err.code === '23505') { // Unique violation
-      return res.status(409).json({ message: 'Email or username already exists' });
+    if (userCheck.rows.length > 0) {
+      return res.status(400).json({ message: 'Email already exists' });
     }
+
+    // Hash the password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Insert user into database
+    const newUser = await pool.query(
+      `INSERT INTO users 
+        (name, email, password_hash, role, age, gender, occupation, work_hours_per_day, academic_hours_per_day)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, name, email, role, age, gender, occupation`,
+      [name, email, hashedPassword, role, age, gender, occupation, work_hours_per_day, academic_hours_per_day]
+    );
+
+    res.status(201).json({ message: 'User created successfully', user: newUser.rows[0] });
+
+  } catch (err) {
+    console.error('Signup error:', err);
     res.status(500).json({ message: 'Server error' });
   }
-};
+});
+
+export default router;
