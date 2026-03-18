@@ -9,26 +9,26 @@ const router = express.Router();
 router.post('/signup', async (req, res) => {
   try {
     const {
-      name,
+      username,
       email,
       password,
-      role,
       age = null,
       gender = null,
-      occupation = null,
-      work_hours_per_day = null,
-      academic_hours_per_day = null
+      user_type = null
     } = req.body;
 
     // Validate required fields
-    if (!name || !email || !password || !role) {
-      return res.status(400).json({ message: 'Name, email, password, and role are required' });
+    if (!username || !email || !password) {
+      return res.status(400).json({ message: 'Username, email, and password are required' });
     }
 
-    // Check if email already exists
-    const userCheck = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    // Check if email or username already exists
+    const userCheck = await pool.query(
+      'SELECT * FROM users WHERE email = $1 OR username = $2',
+      [email, username]
+    );
     if (userCheck.rows.length > 0) {
-      return res.status(400).json({ message: 'Email already exists' });
+      return res.status(400).json({ message: 'Email or username already exists' });
     }
 
     // Hash the password
@@ -37,13 +37,16 @@ router.post('/signup', async (req, res) => {
     // Insert user
     const newUser = await pool.query(
       `INSERT INTO users 
-      (name, email, password_hash, role, age, gender, occupation, work_hours_per_day, academic_hours_per_day)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      RETURNING id, name, email, role, age, gender, occupation`,
-      [name, email, hashedPassword, role, age, gender, occupation, work_hours_per_day, academic_hours_per_day]
+       (username, email, password, age, gender, user_type)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, username, email, age, gender, user_type`,
+      [username, email, hashedPassword, age, gender, user_type]
     );
 
-    res.status(201).json({ message: 'User created successfully', user: newUser.rows[0] });
+    res.status(201).json({
+      message: 'User created successfully',
+      user: newUser.rows[0]
+    });
 
   } catch (err) {
     console.error('Signup error:', err);
