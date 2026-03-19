@@ -1,9 +1,9 @@
 import express from 'express';
 import authRouter from '../controllers/authController.js';
 
-const app = express();
+const router = express.Router();
 
-// Use the router
-app.use('/api', authRouter);
+// mount controller routes
+router.use('/', authRouter);
 
-export default app;
+export default router;
