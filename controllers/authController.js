@@ -39,7 +39,7 @@ router.post('/signup', async (req, res) => {
       `INSERT INTO users 
        (username, email, password, age, gender, user_type)
        VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, username, email, age, gender, user_type`,
+       RETURNING user_id, username, email, age, gender, user_type`,
       [username, email, hashedPassword, age, gender, user_type]
     );
 
@@ -67,16 +67,13 @@ router.post('/login', async (req, res) => {
 
     if (!user) return res.status(401).json({ message: 'Invalid credentials' });
     
-    console.log('Input password:', password);
-    console.log('DB password hash:', user.password);
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) return res.status(401).json({ message: 'Invalid credentials' });
-    console.log('Password match:', validPassword);
 
     res.status(200).json({
       message: 'Login successful',
       user: {
-        id: user.id,
+        user_id: user.user_id,
         username: user.username,
         email: user.email,
         age: user.age,
