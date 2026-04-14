@@ -1,12 +1,7 @@
-// controllers/authController.js
-import express from 'express';
 import bcrypt from 'bcrypt';
 import pool from '../config/db.js';
 
-const router = express.Router();
-
-// Signup endpoint
-router.post('/signup', async (req, res) => {
+export async function signup(req, res) {
   try {
     const {
       username,
@@ -52,10 +47,9 @@ router.post('/signup', async (req, res) => {
     console.error('Signup error:', err);
     res.status(500).json({ error: err.message, });
   }
-});
+}
 
-// Login endpoint
-router.post('/login', async (req, res) => {
+export async function login(req, res) {
   try {
     const { email, password } = req.body;
 
@@ -85,6 +79,4 @@ router.post('/login', async (req, res) => {
     console.error('Login error:', err);
     res.status(500).json({ error: err.message });
   }
-});
-
-export default router;
+}
