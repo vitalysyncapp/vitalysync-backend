@@ -49,6 +49,15 @@ async function ensureUserStreak(client, userId) {
 }
 
 async function readUserStreak(client, userId) {
+  const userResult = await client.query(
+    'SELECT user_id FROM users WHERE user_id = $1',
+    [userId]
+  );
+
+  if (userResult.rowCount === 0) {
+    return null;
+  }
+
   await client.query(
     `INSERT INTO user_streaks (user_id)
      VALUES ($1)
@@ -87,6 +96,12 @@ export async function getTodayLog(req, res) {
   }
 
   try {
+    const streakRow = await readUserStreak(pool, userId);
+
+    if (!streakRow) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
     const logResult = await pool.query(
       `SELECT
          log_id,
@@ -105,8 +120,6 @@ export async function getTodayLog(req, res) {
        WHERE user_id = $1 AND log_date = $2`,
       [userId, logDate]
     );
-
-    const streakRow = await readUserStreak(pool, userId);
 
     return res.status(200).json({
       has_log: logResult.rowCount > 0,
@@ -128,6 +141,10 @@ export async function getCurrentStreak(req, res) {
 
   try {
     const streakRow = await readUserStreak(pool, userId);
+
+    if (!streakRow) {
+      return res.status(404).json({ message: 'User not found' });
+    }
 
     return res.status(200).json({
       streak: formatStreakPayload(streakRow)
