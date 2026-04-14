@@ -1,6 +1,28 @@
 import bcrypt from 'bcrypt';
 import pool from '../config/db.js';
 
+async function ensureUserStreak(userId) {
+  await pool.query(
+    `INSERT INTO user_streaks (user_id)
+     VALUES ($1)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId]
+  );
+
+  const streakResult = await pool.query(
+    `SELECT current_streak, longest_streak, last_logged_date
+     FROM user_streaks
+     WHERE user_id = $1`,
+    [userId]
+  );
+
+  return streakResult.rows[0] ?? {
+    current_streak: 0,
+    longest_streak: 0,
+    last_logged_date: null
+  };
+}
+
 export async function signup(req, res) {
   try {
     const {
@@ -38,9 +60,12 @@ export async function signup(req, res) {
       [username, email, hashedPassword, age, gender, user_type]
     );
 
+    const streak = await ensureUserStreak(newUser.rows[0].user_id);
+
     res.status(201).json({
       message: 'User created successfully',
-      user: newUser.rows[0]
+      user: newUser.rows[0],
+      streak
     });
 
   } catch (err) {
@@ -64,6 +89,8 @@ export async function login(req, res) {
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) return res.status(401).json({ message: 'Invalid credentials' });
 
+    const streak = await ensureUserStreak(user.user_id);
+
     res.status(200).json({
       message: 'Login successful',
       user: {
@@ -74,6 +101,7 @@ export async function login(req, res) {
         gender: user.gender,
         user_type: user.user_type,
       },
+      streak,
     });
   } catch (err) {
     console.error('Login error:', err);
