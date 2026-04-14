@@ -155,6 +155,52 @@ export async function getCurrentStreak(req, res) {
   }
 }
 
+export async function getLatestLog(req, res) {
+  const userId = Number(req.query.user_id);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Valid user_id is required' });
+  }
+
+  try {
+    const streakRow = await readUserStreak(pool, userId);
+
+    if (!streakRow) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const latestLogResult = await pool.query(
+      `SELECT
+         log_id,
+         user_id,
+         log_date,
+         sleep_hours,
+         sleep_quality,
+         mood_index,
+         energy_level,
+         hydration_liters,
+         exercise_names,
+         symptom_names,
+         created_at,
+         updated_at
+       FROM daily_logs
+       WHERE user_id = $1
+       ORDER BY log_date DESC
+       LIMIT 1`,
+      [userId]
+    );
+
+    return res.status(200).json({
+      has_log: latestLogResult.rowCount > 0,
+      log: latestLogResult.rows[0] ?? null,
+      streak: formatStreakPayload(streakRow)
+    });
+  } catch (error) {
+    console.error('Get latest log error:', error);
+    return res.status(500).json({ message: 'Failed to fetch latest log' });
+  }
+}
+
 export async function saveDailyLog(req, res) {
   const {
     user_id: rawUserId,
