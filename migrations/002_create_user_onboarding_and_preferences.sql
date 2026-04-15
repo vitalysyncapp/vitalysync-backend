@@ -71,8 +71,8 @@ SET onboarding_completed = TRUE,
 WHERE onboarding_completed = FALSE
   AND EXISTS (
     SELECT 1
-    FROM user_onboarding onboarding
-    WHERE onboarding.user_id = users.user_id
+    FROM user_preferences preferences
+    WHERE preferences.user_id = users.user_id
   );
 
 ALTER TABLE users DROP COLUMN IF EXISTS age;
