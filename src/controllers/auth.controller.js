@@ -1,6 +1,30 @@
 import bcrypt from 'bcrypt';
 import pool from '../config/db.js';
 
+async function getAuthSchemaSupport() {
+  const result = await pool.query(`
+    SELECT
+      EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'users'
+          AND column_name = 'onboarding_completed'
+      ) AS has_onboarding_completed,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'user_onboarding'
+      ) AS has_user_onboarding
+  `);
+
+  return result.rows[0] ?? {
+    has_onboarding_completed: false,
+    has_user_onboarding: false
+  };
+}
+
 async function ensureUserStreak(userId) {
   await pool.query(
     `INSERT INTO user_streaks (user_id)
@@ -57,15 +81,19 @@ export async function signup(req, res) {
 
     // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
+    const schema = await getAuthSchemaSupport();
 
     // Insert user
-    const newUser = await pool.query(
-      `INSERT INTO users 
-       (username, email, password)
-       VALUES ($1, $2, $3)
-       RETURNING user_id, username, email, onboarding_completed, NULL::TEXT AS user_type`,
-      [username, email, hashedPassword]
-    );
+    const signupQuery = schema.has_onboarding_completed
+      ? `INSERT INTO users
+         (username, email, password)
+         VALUES ($1, $2, $3)
+         RETURNING user_id, username, email, onboarding_completed, NULL::TEXT AS user_type`
+      : `INSERT INTO users
+         (username, email, password)
+         VALUES ($1, $2, $3)
+         RETURNING user_id, username, email, FALSE AS onboarding_completed, NULL::TEXT AS user_type`;
+    const newUser = await pool.query(signupQuery, [username, email, hashedPassword]);
 
     const streak = await ensureUserStreak(newUser.rows[0].user_id);
 
@@ -88,20 +116,29 @@ export async function login(req, res) {
     if (!email || !password)
       return res.status(400).json({ message: 'Email and password required' });
 
-    const userQuery = await pool.query(
-      `SELECT
-         users.user_id,
-         users.username,
-         users.email,
-         users.password,
-         users.onboarding_completed,
-         onboarding.role_type AS user_type
-       FROM users
-       LEFT JOIN user_onboarding onboarding
-         ON onboarding.user_id = users.user_id
-       WHERE users.email = $1`,
-      [email]
-    );
+    const schema = await getAuthSchemaSupport();
+    const loginQuery = schema.has_user_onboarding
+      ? `SELECT
+           users.user_id,
+           users.username,
+           users.email,
+           users.password,
+           ${schema.has_onboarding_completed ? 'users.onboarding_completed' : 'FALSE AS onboarding_completed'},
+           onboarding.role_type AS user_type
+         FROM users
+         LEFT JOIN user_onboarding onboarding
+           ON onboarding.user_id = users.user_id
+         WHERE users.email = $1`
+      : `SELECT
+           users.user_id,
+           users.username,
+           users.email,
+           users.password,
+           ${schema.has_onboarding_completed ? 'users.onboarding_completed' : 'FALSE AS onboarding_completed'},
+           NULL::TEXT AS user_type
+         FROM users
+         WHERE users.email = $1`;
+    const userQuery = await pool.query(loginQuery, [email]);
     const user = userQuery.rows[0];
 
     if (!user) return res.status(401).json({ message: 'Invalid credentials' });
@@ -137,6 +174,8 @@ export async function updateProfile(req, res) {
       });
     }
 
+    const schema = await getAuthSchemaSupport();
+
     const existingUser = await pool.query(
       'SELECT user_id FROM users WHERE user_id = $1',
       [user_id]
@@ -159,17 +198,21 @@ export async function updateProfile(req, res) {
       });
     }
 
-    const updatedUser = await pool.query(
-      `UPDATE users
-       SET username = $1,
-           email = $2
-       WHERE user_id = $3
-       RETURNING user_id, username, email, onboarding_completed`,
-      [username, email, user_id]
-    );
+    const updateQuery = schema.has_onboarding_completed
+      ? `UPDATE users
+         SET username = $1,
+             email = $2
+         WHERE user_id = $3
+         RETURNING user_id, username, email, onboarding_completed`
+      : `UPDATE users
+         SET username = $1,
+             email = $2
+         WHERE user_id = $3
+         RETURNING user_id, username, email, FALSE AS onboarding_completed`;
+    const updatedUser = await pool.query(updateQuery, [username, email, user_id]);
 
     const normalizedRoleType = String(user_type ?? '').trim();
-    if (normalizedRoleType) {
+    if (schema.has_user_onboarding && normalizedRoleType) {
       await pool.query(
         `INSERT INTO user_onboarding (user_id, role_type)
          VALUES ($1, $2)
@@ -180,12 +223,14 @@ export async function updateProfile(req, res) {
       );
     }
 
-    const roleResult = await pool.query(
-      `SELECT role_type AS user_type
-       FROM user_onboarding
-       WHERE user_id = $1`,
-      [user_id]
-    );
+    const roleResult = schema.has_user_onboarding
+      ? await pool.query(
+          `SELECT role_type AS user_type
+           FROM user_onboarding
+           WHERE user_id = $1`,
+          [user_id]
+        )
+      : { rows: [] };
 
     res.status(200).json({
       message: 'Profile updated successfully',
