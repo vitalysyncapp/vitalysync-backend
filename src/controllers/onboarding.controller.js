@@ -160,7 +160,9 @@ async function fetchOnboardingBundle(userId) {
     onboarding: onboardingResult.rows[0] ?? null,
     preferences: preferencesResult.rows[0] ?? null,
     busy_days: busyDaysResult.rows.map((row) => row.day_of_week),
-    onboarding_completed: userResult.rows[0]?.onboarding_completed ?? false,
+    onboarding_completed:
+      (userResult.rows[0]?.onboarding_completed ?? false) &&
+      preferencesResult.rowCount > 0,
     onboarding_completed_at: userResult.rows[0]?.onboarding_completed_at ?? null
   };
 }

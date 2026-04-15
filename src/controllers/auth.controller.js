@@ -53,7 +53,7 @@ function formatUserPayload(user) {
     username: user.username,
     email: user.email,
     user_type: user.user_type ?? null,
-    onboarding_completed: user.onboarding_completed ?? false
+    onboarding_completed: user.onboarding_completed == true && user.has_preferences == true
   };
 }
 
@@ -124,7 +124,12 @@ export async function login(req, res) {
            users.email,
            users.password,
            ${schema.has_onboarding_completed ? 'users.onboarding_completed' : 'FALSE AS onboarding_completed'},
-           onboarding.role_type AS user_type
+           onboarding.role_type AS user_type,
+           EXISTS (
+             SELECT 1
+             FROM user_preferences preferences
+             WHERE preferences.user_id = users.user_id
+           ) AS has_preferences
          FROM users
          LEFT JOIN user_onboarding onboarding
            ON onboarding.user_id = users.user_id
@@ -135,7 +140,8 @@ export async function login(req, res) {
            users.email,
            users.password,
            ${schema.has_onboarding_completed ? 'users.onboarding_completed' : 'FALSE AS onboarding_completed'},
-           NULL::TEXT AS user_type
+           NULL::TEXT AS user_type,
+           FALSE AS has_preferences
          FROM users
          WHERE users.email = $1`;
     const userQuery = await pool.query(loginQuery, [email]);
@@ -236,7 +242,8 @@ export async function updateProfile(req, res) {
       message: 'Profile updated successfully',
       user: formatUserPayload({
         ...updatedUser.rows[0],
-        user_type: roleResult.rows[0]?.user_type ?? null
+        user_type: roleResult.rows[0]?.user_type ?? null,
+        has_preferences: false
       })
     });
   } catch (err) {
