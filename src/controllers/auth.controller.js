@@ -1,7 +1,19 @@
 import bcrypt from 'bcrypt';
 import pool from '../config/db.js';
 
+let authSchemaSupportCache = null;
+let authSchemaSupportFetchedAt = 0;
+const AUTH_SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
+
 async function getAuthSchemaSupport() {
+  const now = Date.now();
+  if (
+    authSchemaSupportCache &&
+    now - authSchemaSupportFetchedAt < AUTH_SCHEMA_CACHE_TTL_MS
+  ) {
+    return authSchemaSupportCache;
+  }
+
   const result = await pool.query(`
     SELECT
       EXISTS (
@@ -25,11 +37,14 @@ async function getAuthSchemaSupport() {
       ) AS has_user_preferences
   `);
 
-  return result.rows[0] ?? {
+  authSchemaSupportCache = result.rows[0] ?? {
     has_onboarding_completed: false,
     has_user_onboarding: false,
     has_user_preferences: false
   };
+  authSchemaSupportFetchedAt = now;
+
+  return authSchemaSupportCache;
 }
 
 async function ensureUserStreak(userId) {
