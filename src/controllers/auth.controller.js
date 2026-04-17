@@ -16,12 +16,19 @@ async function getAuthSchemaSupport() {
         FROM information_schema.tables
         WHERE table_schema = 'public'
           AND table_name = 'user_onboarding'
-      ) AS has_user_onboarding
+      ) AS has_user_onboarding,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'user_preferences'
+      ) AS has_user_preferences
   `);
 
   return result.rows[0] ?? {
     has_onboarding_completed: false,
-    has_user_onboarding: false
+    has_user_onboarding: false,
+    has_user_preferences: false
   };
 }
 
@@ -117,6 +124,13 @@ export async function login(req, res) {
       return res.status(400).json({ message: 'Email and password required' });
 
     const schema = await getAuthSchemaSupport();
+    const hasPreferencesQuery = schema.has_user_preferences
+      ? `EXISTS (
+           SELECT 1
+           FROM user_preferences preferences
+           WHERE preferences.user_id = users.user_id
+         ) AS has_preferences`
+      : 'FALSE AS has_preferences';
     const loginQuery = schema.has_user_onboarding
       ? `SELECT
            users.user_id,
@@ -125,11 +139,7 @@ export async function login(req, res) {
            users.password,
            ${schema.has_onboarding_completed ? 'users.onboarding_completed' : 'FALSE AS onboarding_completed'},
            onboarding.role_type AS user_type,
-           EXISTS (
-             SELECT 1
-             FROM user_preferences preferences
-             WHERE preferences.user_id = users.user_id
-           ) AS has_preferences
+           ${hasPreferencesQuery}
          FROM users
          LEFT JOIN user_onboarding onboarding
            ON onboarding.user_id = users.user_id

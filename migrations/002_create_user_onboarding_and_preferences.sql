@@ -50,20 +50,30 @@ CREATE TABLE IF NOT EXISTS user_busy_days (
 CREATE INDEX IF NOT EXISTS idx_user_busy_days_user_id
   ON user_busy_days (user_id);
 
-INSERT INTO user_onboarding (
-  user_id,
-  role_type,
-  skipped
-)
-SELECT
-  user_id,
-  NULLIF(TRIM(COALESCE(user_type, '')), ''),
-  FALSE
-FROM users
-WHERE (
-  NULLIF(TRIM(COALESCE(user_type, '')), '') IS NOT NULL
-)
-ON CONFLICT (user_id) DO NOTHING;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_name = 'users'
+      AND column_name = 'user_type'
+  ) THEN
+    INSERT INTO user_onboarding (
+      user_id,
+      role_type,
+      skipped
+    )
+    SELECT
+      user_id,
+      NULLIF(TRIM(COALESCE(user_type, '')), ''),
+      FALSE
+    FROM users
+    WHERE (
+      NULLIF(TRIM(COALESCE(user_type, '')), '') IS NOT NULL
+    )
+    ON CONFLICT (user_id) DO NOTHING;
+  END IF;
+END $$;
 
 UPDATE users
 SET onboarding_completed = TRUE,

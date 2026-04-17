@@ -1,3 +1,5 @@
+import pool from '../config/db.js';
+
 const OPENWEATHER_BASE_URL = 'https://api.openweathermap.org/data/2.5';
 
 const AQI_LABELS = {
@@ -32,7 +34,25 @@ function toNumber(value, fallback = 0) {
   return Number.isFinite(Number(value)) ? Number(value) : fallback;
 }
 
-export async function fetchEnvironmentSnapshot({ lat, lon }) {
+function getDayPeriod(date = new Date()) {
+  const hour = date.getHours();
+
+  if (hour >= 5 && hour < 11) {
+    return 'morning';
+  }
+
+  if (hour >= 11 && hour < 17) {
+    return 'noon';
+  }
+
+  return 'night';
+}
+
+function getSnapshotDate(date = new Date()) {
+  return date.toISOString().slice(0, 10);
+}
+
+export async function fetchEnvironmentSnapshot({ lat, lon, userId = null }) {
   const apiKey = String(process.env.OPENWEATHER_API_KEY ?? '').trim();
 
   if (!apiKey) {
@@ -64,7 +84,7 @@ export async function fetchEnvironmentSnapshot({ lat, lon }) {
     : {};
   const aqi = toNumber(airQuality.main?.aqi, 0);
 
-  return {
+  const snapshot = {
     location: String(weatherData.name ?? 'Unknown location'),
     coordinates: {
       lat: toNumber(weatherData.coord?.lat, lat),
@@ -94,4 +114,100 @@ export async function fetchEnvironmentSnapshot({ lat, lon }) {
     },
     fetched_at: new Date().toISOString()
   };
+
+  if (Number.isInteger(userId) && userId > 0) {
+    await upsertEnvironmentSnapshot({
+      userId,
+      snapshot
+    });
+  }
+
+  return snapshot;
+}
+
+export async function upsertEnvironmentSnapshot({ userId, snapshot }) {
+  const fetchedAt = new Date(snapshot.fetched_at);
+  const snapshotDate = getSnapshotDate(fetchedAt);
+  const dayPeriod = getDayPeriod(fetchedAt);
+
+  await pool.query(
+    `INSERT INTO user_environment_snapshots (
+       user_id,
+       snapshot_date,
+       day_period,
+       location_name,
+       latitude,
+       longitude,
+       weather_main,
+       weather_description,
+       weather_icon,
+       temperature_c,
+       feels_like_c,
+       humidity,
+       pressure,
+       wind_speed,
+       aqi,
+       aqi_label,
+       pm2_5,
+       pm10,
+       o3,
+       no2,
+       so2,
+       co,
+       fetched_at,
+       updated_at
+     )
+     VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+       $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, NOW()
+     )
+     ON CONFLICT (user_id, snapshot_date, day_period)
+     DO UPDATE SET
+       location_name = EXCLUDED.location_name,
+       latitude = EXCLUDED.latitude,
+       longitude = EXCLUDED.longitude,
+       weather_main = EXCLUDED.weather_main,
+       weather_description = EXCLUDED.weather_description,
+       weather_icon = EXCLUDED.weather_icon,
+       temperature_c = EXCLUDED.temperature_c,
+       feels_like_c = EXCLUDED.feels_like_c,
+       humidity = EXCLUDED.humidity,
+       pressure = EXCLUDED.pressure,
+       wind_speed = EXCLUDED.wind_speed,
+       aqi = EXCLUDED.aqi,
+       aqi_label = EXCLUDED.aqi_label,
+       pm2_5 = EXCLUDED.pm2_5,
+       pm10 = EXCLUDED.pm10,
+       o3 = EXCLUDED.o3,
+       no2 = EXCLUDED.no2,
+       so2 = EXCLUDED.so2,
+       co = EXCLUDED.co,
+       fetched_at = EXCLUDED.fetched_at,
+       updated_at = NOW()`,
+    [
+      userId,
+      snapshotDate,
+      dayPeriod,
+      snapshot.location,
+      snapshot.coordinates.lat,
+      snapshot.coordinates.lon,
+      snapshot.weather.main,
+      snapshot.weather.description,
+      snapshot.weather.icon,
+      snapshot.weather.temperature_c,
+      snapshot.weather.feels_like_c,
+      snapshot.weather.humidity,
+      snapshot.weather.pressure,
+      snapshot.weather.wind_speed,
+      snapshot.air_quality.aqi,
+      snapshot.air_quality.aqi_label,
+      snapshot.air_quality.components.pm2_5,
+      snapshot.air_quality.components.pm10,
+      snapshot.air_quality.components.o3,
+      snapshot.air_quality.components.no2,
+      snapshot.air_quality.components.so2,
+      snapshot.air_quality.components.co,
+      snapshot.fetched_at
+    ]
+  );
 }
