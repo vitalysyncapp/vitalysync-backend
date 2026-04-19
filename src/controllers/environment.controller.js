@@ -37,8 +37,12 @@ export async function getEnvironmentSnapshot(req, res) {
     return res.status(200).json(snapshot);
   } catch (error) {
     console.error('Environment fetch error:', error.message);
-    return res.status(500).json({
-      message: 'Failed to fetch environment data'
+    const isTimeout = String(error?.message ?? '').includes('timed out');
+
+    return res.status(isTimeout ? 504 : 500).json({
+      message: isTimeout
+        ? 'Environment provider timed out. Please try again.'
+        : 'Failed to fetch environment data'
     });
   }
 }

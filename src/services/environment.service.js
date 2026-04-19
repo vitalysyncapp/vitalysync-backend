@@ -1,6 +1,7 @@
 import pool from '../config/db.js';
 
 const OPENWEATHER_BASE_URL = 'https://api.openweathermap.org/data/2.5';
+const OPENWEATHER_TIMEOUT_MS = 8000;
 
 const AQI_LABELS = {
   1: 'Good',
@@ -21,7 +22,23 @@ function buildOpenWeatherUrl(path, params) {
 }
 
 async function fetchJson(url) {
-  const response = await fetch(url);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), OPENWEATHER_TIMEOUT_MS);
+
+  let response;
+  try {
+    response = await fetch(url, {
+      signal: controller.signal
+    });
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error(`OpenWeather request timed out after ${OPENWEATHER_TIMEOUT_MS}ms`);
+    }
+
+    throw new Error(`OpenWeather request failed: ${error.message}`);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     throw new Error(`OpenWeather request failed with status ${response.status}`);
