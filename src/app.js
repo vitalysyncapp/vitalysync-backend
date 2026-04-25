@@ -18,4 +18,17 @@ app.use('/api/logs', logRoutes);
 app.use('/api/nutrition', nutritionRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 
+app.use('/api', (req, res) => {
+  res.status(404).json({
+    message: `API route not found: ${req.method} ${req.originalUrl}`,
+  });
+});
+
+app.use((error, _req, res, _next) => {
+  console.error('Unhandled API error:', error);
+  res.status(500).json({
+    message: 'Unexpected server error',
+  });
+});
+
 export default app;
