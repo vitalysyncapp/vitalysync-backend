@@ -1,6 +1,6 @@
 import pool from '../config/db.js';
 
-const DEFAULT_GOAL_STEPS = 8000;
+const DEFAULT_GOAL_STEPS = 5000;
 const DEFAULT_STEP_LENGTH_METERS = 0.75;
 const DEFAULT_EXERCISE_TYPE = 'walking';
 const DEFAULT_SOURCE = 'phone_sensor';
@@ -231,6 +231,66 @@ export async function getTodayActivity(req, res) {
   } catch (error) {
     console.error('Get today activity error:', error);
     return res.status(500).json({ message: 'Failed to fetch activity log' });
+  }
+}
+
+export async function getActivityHistory(req, res) {
+  const userId = Number(req.params.userId);
+  const endDate = String(req.query?.end ?? todayKey()).trim();
+  const startDate = String(
+    req.query?.start ??
+      new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  ).trim();
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Valid user_id is required' });
+  }
+
+  if (!isValidDateString(startDate) || !isValidDateString(endDate)) {
+    return res.status(400).json({ message: 'Valid start and end dates are required' });
+  }
+
+  if (startDate > endDate) {
+    return res.status(400).json({ message: 'start must be before or equal to end' });
+  }
+
+  try {
+    const userExists = await ensureUserExists(pool, userId);
+    if (!userExists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const result = await pool.query(
+      `SELECT
+         activity_log_id,
+         user_id,
+         log_date,
+         steps,
+         distance_meters,
+         active_minutes,
+         calories_burned,
+         exercise_type,
+         goal_steps,
+         goal_distance_meters,
+         goal_completed,
+         source,
+         created_at,
+         updated_at
+       FROM daily_activity_logs
+       WHERE user_id = $1
+         AND log_date BETWEEN $2 AND $3
+       ORDER BY log_date ASC`,
+      [userId, startDate, endDate]
+    );
+
+    return res.status(200).json({
+      start_date: startDate,
+      end_date: endDate,
+      logs: result.rows.map(formatActivityPayload),
+    });
+  } catch (error) {
+    console.error('Get activity history error:', error);
+    return res.status(500).json({ message: 'Failed to fetch activity history' });
   }
 }
 
