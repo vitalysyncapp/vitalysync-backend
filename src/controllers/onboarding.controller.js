@@ -1,6 +1,19 @@
 import pool from '../config/db.js';
+import {
+  OnboardingServiceError,
+  getOnboardingStatus as fetchRequiredOnboardingStatus,
+  getOnboardingSummaryBundle,
+  submitRequiredOnboarding
+} from '../services/onboarding.service.js';
 
-const allowedActivityLevels = new Set(['Sedentary', 'Balanced', 'Active']);
+const allowedActivityLevels = new Set([
+  'Sedentary',
+  'Lightly Active',
+  'Balanced',
+  'Moderately Active',
+  'Active',
+  'Very Active'
+]);
 const allowedMealRegularness = new Set([
   'Very Irregular',
   'Irregular',
@@ -16,6 +29,10 @@ const allowedNudgeStyles = new Set([
 const allowedGoals = new Set([
   'Reduce stress',
   'Improve sleep',
+  'Be more active',
+  'Improve focus',
+  'Build healthier habits',
+  'Manage burnout',
   'Build consistency',
   'Eat better',
   'Move more'
@@ -179,11 +196,54 @@ export async function getOnboardingSummary(req, res) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const payload = await fetchOnboardingBundle(userId);
-    return res.status(200).json(payload);
+    const legacyPayload = await fetchOnboardingBundle(userId);
+    const requiredPayload = await getOnboardingSummaryBundle(userId);
+
+    return res.status(200).json({
+      ...legacyPayload,
+      ...requiredPayload,
+      onboarding: legacyPayload.onboarding,
+      preferences: legacyPayload.preferences,
+      busy_days: legacyPayload.busy_days
+    });
   } catch (error) {
     console.error('Get onboarding summary error:', error);
     return res.status(500).json({ message: 'Failed to fetch onboarding summary' });
+  }
+}
+
+export async function getRequiredOnboardingStatus(req, res) {
+  const userId = Number(req.params.userId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Valid user_id is required' });
+  }
+
+  try {
+    const status = await fetchRequiredOnboardingStatus(userId);
+
+    if (!status) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    return res.status(200).json(status);
+  } catch (error) {
+    console.error('Get onboarding status error:', error);
+    return res.status(500).json({ message: 'Failed to fetch onboarding status' });
+  }
+}
+
+export async function submitOnboarding(req, res) {
+  try {
+    const payload = await submitRequiredOnboarding(req.body);
+    return res.status(201).json(payload);
+  } catch (error) {
+    if (error instanceof OnboardingServiceError) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+
+    console.error('Submit onboarding error:', error);
+    return res.status(500).json({ message: 'Failed to submit onboarding' });
   }
 }
 
