@@ -2,7 +2,9 @@ import express from 'express';
 import cors from 'cors';
 
 import authRoutes from './routes/auth.routes.js';
+import activityRoutes from './routes/activity.routes.js';
 import environmentRoutes from './routes/environment.routes.js';
+import exerciseGoalRoutes from './routes/exerciseGoal.routes.js';
 import logRoutes from './routes/log.routes.js';
 import nutritionRoutes from './routes/nutrition.routes.js';
 import onboardingRoutes from './routes/onboarding.routes.js';
@@ -14,7 +16,9 @@ app.use(cors());
 app.use(express.json());
 
 app.use('/api/auth', authRoutes);
+app.use('/api/activity', activityRoutes);
 app.use('/api/environment', environmentRoutes);
+app.use('/api/exercise-goals', exerciseGoalRoutes);
 app.use('/api/logs', logRoutes);
 app.use('/api/nutrition', nutritionRoutes);
 app.use('/api/onboarding', onboardingRoutes);

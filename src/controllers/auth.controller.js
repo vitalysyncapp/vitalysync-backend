@@ -547,6 +547,18 @@ async function getAccountDeletionSupport(client) {
         SELECT 1
         FROM information_schema.tables
         WHERE table_schema = 'public'
+          AND table_name = 'daily_activity_logs'
+      ) AS has_daily_activity_logs,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'daily_exercise_goals'
+      ) AS has_daily_exercise_goals,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
           AND table_name = 'user_streaks'
       ) AS has_user_streaks,
       EXISTS (
@@ -577,6 +589,8 @@ async function getAccountDeletionSupport(client) {
 
   return result.rows[0] ?? {
     has_daily_logs: false,
+    has_daily_activity_logs: false,
+    has_daily_exercise_goals: false,
     has_user_streaks: false,
     has_user_busy_days: false,
     has_user_preferences: false,
@@ -648,6 +662,20 @@ export async function deleteAccount(req, res) {
     if (schema.has_daily_logs) {
       await client.query(
         'DELETE FROM daily_logs WHERE user_id = $1',
+        [userId]
+      );
+    }
+
+    if (schema.has_daily_activity_logs) {
+      await client.query(
+        'DELETE FROM daily_activity_logs WHERE user_id = $1',
+        [userId]
+      );
+    }
+
+    if (schema.has_daily_exercise_goals) {
+      await client.query(
+        'DELETE FROM daily_exercise_goals WHERE user_id = $1',
         [userId]
       );
     }

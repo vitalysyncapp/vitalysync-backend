@@ -16,6 +16,31 @@ function normalizeStringArray(value) {
   return [...new Set(normalized)];
 }
 
+function normalizeNullableText(value) {
+  const trimmed = String(value ?? '').trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeOptionalBoolean(value) {
+  if (value == null) {
+    return null;
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'true') {
+    return true;
+  }
+  if (normalized === 'false') {
+    return false;
+  }
+
+  return null;
+}
+
 function parseDateOnly(value) {
   if (!value) {
     return null;
@@ -114,6 +139,10 @@ export async function getTodayLog(req, res) {
          hydration_liters,
          exercise_names,
          symptom_names,
+         exercise_goal_name,
+         exercise_goal_completed,
+         exercise_goal_source,
+         exercise_goal_status,
          created_at,
          updated_at
        FROM daily_logs
@@ -181,6 +210,10 @@ export async function getLatestLog(req, res) {
          hydration_liters,
          exercise_names,
          symptom_names,
+         exercise_goal_name,
+         exercise_goal_completed,
+         exercise_goal_source,
+         exercise_goal_status,
          created_at,
          updated_at
        FROM daily_logs
@@ -211,12 +244,20 @@ export async function saveDailyLog(req, res) {
     energy_level: energyLevel,
     hydration_liters: hydrationLiters,
     exercise_names: exerciseNames,
-    symptom_names: symptomNames
+    symptom_names: symptomNames,
+    exercise_goal_name: exerciseGoalName,
+    exercise_goal_completed: exerciseGoalCompleted,
+    exercise_goal_source: exerciseGoalSource,
+    exercise_goal_status: exerciseGoalStatus
   } = req.body;
 
   const userId = Number(rawUserId);
   const normalizedExercises = normalizeStringArray(exerciseNames);
   const normalizedSymptoms = normalizeStringArray(symptomNames);
+  const normalizedExerciseGoalName = normalizeNullableText(exerciseGoalName);
+  const normalizedExerciseGoalCompleted = normalizeOptionalBoolean(exerciseGoalCompleted);
+  const normalizedExerciseGoalSource = normalizeNullableText(exerciseGoalSource);
+  const normalizedExerciseGoalStatus = normalizeNullableText(exerciseGoalStatus);
 
   if (!Number.isInteger(userId) || userId <= 0) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -295,6 +336,10 @@ export async function saveDailyLog(req, res) {
              hydration_liters = $7,
              exercise_names = $8,
              symptom_names = $9,
+             exercise_goal_name = COALESCE($10, exercise_goal_name),
+             exercise_goal_completed = COALESCE($11, exercise_goal_completed),
+             exercise_goal_source = COALESCE($12, exercise_goal_source),
+             exercise_goal_status = COALESCE($13, exercise_goal_status),
              updated_at = NOW()
          WHERE user_id = $1 AND log_date = $2`,
         [
@@ -306,7 +351,11 @@ export async function saveDailyLog(req, res) {
           Number(energyLevel),
           Number(hydrationLiters),
           normalizedExercises,
-          normalizedSymptoms
+          normalizedSymptoms,
+          normalizedExerciseGoalName,
+          normalizedExerciseGoalCompleted,
+          normalizedExerciseGoalSource,
+          normalizedExerciseGoalStatus
         ]
       );
     } else {
@@ -320,9 +369,13 @@ export async function saveDailyLog(req, res) {
            energy_level,
            hydration_liters,
            exercise_names,
-           symptom_names
+           symptom_names,
+           exercise_goal_name,
+           exercise_goal_completed,
+           exercise_goal_source,
+           exercise_goal_status
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, FALSE), $12, $13)`,
         [
           userId,
           logDate,
@@ -332,7 +385,11 @@ export async function saveDailyLog(req, res) {
           Number(energyLevel),
           Number(hydrationLiters),
           normalizedExercises,
-          normalizedSymptoms
+          normalizedSymptoms,
+          normalizedExerciseGoalName,
+          normalizedExerciseGoalCompleted,
+          normalizedExerciseGoalSource,
+          normalizedExerciseGoalStatus
         ]
       );
 
@@ -375,6 +432,10 @@ export async function saveDailyLog(req, res) {
          hydration_liters,
          exercise_names,
          symptom_names,
+         exercise_goal_name,
+         exercise_goal_completed,
+         exercise_goal_source,
+         exercise_goal_status,
          created_at,
          updated_at
        FROM daily_logs
