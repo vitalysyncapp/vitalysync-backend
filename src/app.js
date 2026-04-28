@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 
+import adaptiveRoutes from './routes/adaptive.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import activityRoutes from './routes/activity.routes.js';
 import environmentRoutes from './routes/environment.routes.js';
@@ -15,6 +16,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.use('/api/adaptive', adaptiveRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/environment', environmentRoutes);

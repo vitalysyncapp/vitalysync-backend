@@ -4,7 +4,9 @@ import {
   getCurrentStreak,
   getLatestLog,
   getTodayLog,
-  saveDailyLog
+  getWeeklyPulseStatus,
+  saveDailyLog,
+  saveWeeklyPulse
 } from '../controllers/log.controller.js';
 
 const router = express.Router();
@@ -12,6 +14,8 @@ const router = express.Router();
 router.get('/today', getTodayLog);
 router.get('/latest', getLatestLog);
 router.get('/streak', getCurrentStreak);
+router.get('/weekly-pulse/status', getWeeklyPulseStatus);
+router.post('/weekly-pulse', saveWeeklyPulse);
 router.post('/', saveDailyLog);
 
 export default router;

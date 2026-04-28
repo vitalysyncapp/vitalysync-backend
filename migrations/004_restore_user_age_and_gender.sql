@@ -1,0 +1,3 @@
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS age SMALLINT CHECK (age BETWEEN 1 AND 120),
+  ADD COLUMN IF NOT EXISTS gender TEXT CHECK (gender IN ('Male', 'Female', 'Other'));

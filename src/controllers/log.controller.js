@@ -1,5 +1,15 @@
 import pool from '../config/db.js';
 
+const ALLOWED_WORKLOAD_HOURS_BANDS = new Set([
+  'None',
+  '1-2 hours',
+  '3-4 hours',
+  '5-6 hours',
+  '6-7 hours',
+  '8-9 hours',
+  '10-12 hours'
+]);
+
 function isValidDateString(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value);
 }
@@ -19,6 +29,20 @@ function normalizeStringArray(value) {
 function normalizeNullableText(value) {
   const trimmed = String(value ?? '').trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeWorkloadHoursBand(value) {
+  const normalized = normalizeNullableText(value);
+  return normalized && ALLOWED_WORKLOAD_HOURS_BANDS.has(normalized)
+    ? normalized
+    : null;
+}
+
+function parseLikert(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 5
+    ? parsed
+    : null;
 }
 
 function normalizeOptionalBoolean(value) {
@@ -52,6 +76,29 @@ function parseDateOnly(value) {
   const [year, month, day] = rawValue.split('-').map(Number);
 
   return Date.UTC(year, month - 1, day);
+}
+
+function formatDateOnly(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function getWeekStartDate(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  const utcDate = new Date(Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate()
+  ));
+  const day = utcDate.getUTCDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  utcDate.setUTCDate(utcDate.getUTCDate() + mondayOffset);
+
+  return formatDateOnly(utcDate);
 }
 
 async function ensureUserStreak(client, userId) {
@@ -137,6 +184,9 @@ export async function getTodayLog(req, res) {
          mood_index,
          energy_level,
          hydration_liters,
+         workload_hours_band,
+         perceived_stress_level,
+         break_quality_level,
          exercise_names,
          symptom_names,
          exercise_goal_name,
@@ -208,6 +258,9 @@ export async function getLatestLog(req, res) {
          mood_index,
          energy_level,
          hydration_liters,
+         workload_hours_band,
+         perceived_stress_level,
+         break_quality_level,
          exercise_names,
          symptom_names,
          exercise_goal_name,
@@ -243,6 +296,9 @@ export async function saveDailyLog(req, res) {
     mood_index: moodIndex,
     energy_level: energyLevel,
     hydration_liters: hydrationLiters,
+    workload_hours_band: workloadHoursBand,
+    perceived_stress_level: perceivedStressLevel,
+    break_quality_level: breakQualityLevel,
     exercise_names: exerciseNames,
     symptom_names: symptomNames,
     exercise_goal_name: exerciseGoalName,
@@ -254,6 +310,10 @@ export async function saveDailyLog(req, res) {
   const userId = Number(rawUserId);
   const normalizedExercises = normalizeStringArray(exerciseNames);
   const normalizedSymptoms = normalizeStringArray(symptomNames);
+  const rawWorkloadHoursBand = normalizeNullableText(workloadHoursBand);
+  const normalizedWorkloadHoursBand = normalizeWorkloadHoursBand(workloadHoursBand);
+  const normalizedPerceivedStressLevel = parseLikert(perceivedStressLevel);
+  const normalizedBreakQualityLevel = parseLikert(breakQualityLevel);
   const normalizedExerciseGoalName = normalizeNullableText(exerciseGoalName);
   const normalizedExerciseGoalCompleted = normalizeOptionalBoolean(exerciseGoalCompleted);
   const normalizedExerciseGoalSource = normalizeNullableText(exerciseGoalSource);
@@ -285,6 +345,18 @@ export async function saveDailyLog(req, res) {
 
   if (!Number.isFinite(Number(hydrationLiters)) || Number(hydrationLiters) < 0) {
     return res.status(400).json({ message: 'Valid hydration_liters is required' });
+  }
+
+  if (rawWorkloadHoursBand && !normalizedWorkloadHoursBand) {
+    return res.status(400).json({ message: 'Valid workload_hours_band is required' });
+  }
+
+  if (perceivedStressLevel != null && normalizedPerceivedStressLevel == null) {
+    return res.status(400).json({ message: 'Valid perceived_stress_level is required' });
+  }
+
+  if (breakQualityLevel != null && normalizedBreakQualityLevel == null) {
+    return res.status(400).json({ message: 'Valid break_quality_level is required' });
   }
 
   if (normalizedExercises.length === 0) {
@@ -334,12 +406,15 @@ export async function saveDailyLog(req, res) {
              mood_index = $5,
              energy_level = $6,
              hydration_liters = $7,
-             exercise_names = $8,
-             symptom_names = $9,
-             exercise_goal_name = COALESCE($10, exercise_goal_name),
-             exercise_goal_completed = COALESCE($11, exercise_goal_completed),
-             exercise_goal_source = COALESCE($12, exercise_goal_source),
-             exercise_goal_status = COALESCE($13, exercise_goal_status),
+             workload_hours_band = COALESCE($8, workload_hours_band),
+             perceived_stress_level = COALESCE($9, perceived_stress_level),
+             break_quality_level = COALESCE($10, break_quality_level),
+             exercise_names = $11,
+             symptom_names = $12,
+             exercise_goal_name = COALESCE($13, exercise_goal_name),
+             exercise_goal_completed = COALESCE($14, exercise_goal_completed),
+             exercise_goal_source = COALESCE($15, exercise_goal_source),
+             exercise_goal_status = COALESCE($16, exercise_goal_status),
              updated_at = NOW()
          WHERE user_id = $1 AND log_date = $2`,
         [
@@ -350,6 +425,9 @@ export async function saveDailyLog(req, res) {
           Number(moodIndex),
           Number(energyLevel),
           Number(hydrationLiters),
+          normalizedWorkloadHoursBand,
+          normalizedPerceivedStressLevel,
+          normalizedBreakQualityLevel,
           normalizedExercises,
           normalizedSymptoms,
           normalizedExerciseGoalName,
@@ -368,6 +446,9 @@ export async function saveDailyLog(req, res) {
            mood_index,
            energy_level,
            hydration_liters,
+           workload_hours_band,
+           perceived_stress_level,
+           break_quality_level,
            exercise_names,
            symptom_names,
            exercise_goal_name,
@@ -375,7 +456,10 @@ export async function saveDailyLog(req, res) {
            exercise_goal_source,
            exercise_goal_status
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, FALSE), $12, $13)`,
+         VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+           $11, $12, $13, COALESCE($14, FALSE), $15, $16
+         )`,
         [
           userId,
           logDate,
@@ -384,6 +468,9 @@ export async function saveDailyLog(req, res) {
           Number(moodIndex),
           Number(energyLevel),
           Number(hydrationLiters),
+          normalizedWorkloadHoursBand,
+          normalizedPerceivedStressLevel,
+          normalizedBreakQualityLevel,
           normalizedExercises,
           normalizedSymptoms,
           normalizedExerciseGoalName,
@@ -430,6 +517,9 @@ export async function saveDailyLog(req, res) {
          mood_index,
          energy_level,
          hydration_liters,
+         workload_hours_band,
+         perceived_stress_level,
+         break_quality_level,
          exercise_names,
          symptom_names,
          exercise_goal_name,
@@ -466,5 +556,152 @@ export async function saveDailyLog(req, res) {
     return res.status(500).json({ message: 'Failed to save daily log' });
   } finally {
     client.release();
+  }
+}
+
+export async function getWeeklyPulseStatus(req, res) {
+  const userId = Number(req.query.user_id);
+  const weekStartDate = getWeekStartDate(req.query.date ?? new Date());
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Valid user_id is required' });
+  }
+
+  if (!weekStartDate) {
+    return res.status(400).json({ message: 'Valid date is required' });
+  }
+
+  try {
+    const userResult = await pool.query(
+      'SELECT user_id FROM users WHERE user_id = $1',
+      [userId]
+    );
+
+    if (userResult.rowCount === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const result = await pool.query(
+      `SELECT
+         pulse_id,
+         user_id,
+         week_start_date,
+         productivity_focus_level,
+         recovery_rest_level,
+         detachment_level,
+         accomplishment_level,
+         created_at,
+         updated_at
+       FROM weekly_pulse_responses
+       WHERE user_id = $1 AND week_start_date = $2`,
+      [userId, weekStartDate]
+    );
+
+    return res.status(200).json({
+      week_start_date: weekStartDate,
+      has_response: result.rowCount > 0,
+      response: result.rows[0] ?? null
+    });
+  } catch (error) {
+    console.error('Get weekly pulse status error:', error);
+    return res.status(500).json({ message: 'Failed to fetch weekly pulse status' });
+  }
+}
+
+export async function saveWeeklyPulse(req, res) {
+  const {
+    user_id: rawUserId,
+    response_date: responseDate,
+    productivity_focus_level: productivityFocusLevel,
+    recovery_rest_level: recoveryRestLevel,
+    detachment_level: detachmentLevel,
+    accomplishment_level: accomplishmentLevel
+  } = req.body;
+  const userId = Number(rawUserId);
+  const weekStartDate = getWeekStartDate(responseDate ?? new Date());
+  const normalizedProductivityFocus = parseLikert(productivityFocusLevel);
+  const normalizedRecoveryRest = parseLikert(recoveryRestLevel);
+  const normalizedDetachment = parseLikert(detachmentLevel);
+  const normalizedAccomplishment = parseLikert(accomplishmentLevel);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Valid user_id is required' });
+  }
+
+  if (!weekStartDate) {
+    return res.status(400).json({ message: 'Valid response_date is required' });
+  }
+
+  if (normalizedProductivityFocus == null) {
+    return res.status(400).json({ message: 'Valid productivity_focus_level is required' });
+  }
+
+  if (normalizedRecoveryRest == null) {
+    return res.status(400).json({ message: 'Valid recovery_rest_level is required' });
+  }
+
+  if (normalizedDetachment == null) {
+    return res.status(400).json({ message: 'Valid detachment_level is required' });
+  }
+
+  if (normalizedAccomplishment == null) {
+    return res.status(400).json({ message: 'Valid accomplishment_level is required' });
+  }
+
+  try {
+    const userResult = await pool.query(
+      'SELECT user_id FROM users WHERE user_id = $1',
+      [userId]
+    );
+
+    if (userResult.rowCount === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO weekly_pulse_responses (
+         user_id,
+         week_start_date,
+         productivity_focus_level,
+         recovery_rest_level,
+         detachment_level,
+         accomplishment_level
+       )
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (user_id, week_start_date)
+       DO UPDATE SET
+         productivity_focus_level = EXCLUDED.productivity_focus_level,
+         recovery_rest_level = EXCLUDED.recovery_rest_level,
+         detachment_level = EXCLUDED.detachment_level,
+         accomplishment_level = EXCLUDED.accomplishment_level,
+         updated_at = NOW()
+       RETURNING
+         pulse_id,
+         user_id,
+         week_start_date,
+         productivity_focus_level,
+         recovery_rest_level,
+         detachment_level,
+         accomplishment_level,
+         created_at,
+         updated_at`,
+      [
+        userId,
+        weekStartDate,
+        normalizedProductivityFocus,
+        normalizedRecoveryRest,
+        normalizedDetachment,
+        normalizedAccomplishment
+      ]
+    );
+
+    return res.status(200).json({
+      message: 'Weekly pulse saved successfully',
+      week_start_date: weekStartDate,
+      response: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Save weekly pulse error:', error);
+    return res.status(500).json({ message: 'Failed to save weekly pulse' });
   }
 }
