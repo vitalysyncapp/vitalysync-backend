@@ -1,6 +1,7 @@
 import pool from '../config/db.js';
 import {
   calculateTotals,
+  detectFoodsFromManualInput,
   detectFoodsFromImage,
   enrichFoodsWithUsda,
   isValidDateString,
@@ -91,6 +92,7 @@ export async function analyzeNutrition(req, res) {
   const userId = getUserId(req);
   const mealType = normalizeMealType(req.body?.meal_type);
   const logDate = String(req.body?.log_date ?? '').trim();
+  const inputType = String(req.body?.input_type ?? 'image').trim().toLowerCase();
 
   if (!userId) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -104,8 +106,27 @@ export async function analyzeNutrition(req, res) {
     return res.status(400).json({ message: 'Valid log_date is required' });
   }
 
-  if (!req.file?.buffer) {
+  if (inputType !== 'image' && inputType !== 'manual') {
+    return res.status(400).json({ message: 'Valid input_type is required' });
+  }
+
+  if (inputType === 'image' && !req.file?.buffer) {
     return res.status(400).json({ message: 'Food image is required' });
+  }
+
+  const manualMeals = Array.isArray(req.body?.manual_items)
+    ? req.body.manual_items
+    : [{
+        meal_name: req.body?.meal_name,
+        quantity: req.body?.quantity,
+        notes: req.body?.notes,
+      }];
+
+  if (
+    inputType === 'manual' &&
+    !manualMeals.some((meal) => String(meal?.meal_name ?? '').trim().length > 0)
+  ) {
+    return res.status(400).json({ message: 'Meal name is required' });
   }
 
   try {
@@ -114,13 +135,19 @@ export async function analyzeNutrition(req, res) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const detectedFoods = await detectFoodsFromImage({
-      buffer: req.file.buffer,
-      mimetype: req.file.mimetype,
-    });
+    const detectedFoods = inputType === 'manual'
+      ? await detectFoodsFromManualInput({ meals: manualMeals })
+      : await detectFoodsFromImage({
+          buffer: req.file.buffer,
+          mimetype: req.file.mimetype,
+        });
 
     if (detectedFoods.length === 0) {
-      return res.status(422).json({ message: 'No food could be detected in the image' });
+      return res.status(422).json({
+        message: inputType === 'manual'
+          ? 'No food could be estimated from the manual log'
+          : 'No food could be detected in the image',
+      });
     }
 
     const items = await enrichFoodsWithUsda(detectedFoods);
@@ -150,7 +177,9 @@ export async function analyzeNutrition(req, res) {
     return res.status(500).json({
       message: error.message?.includes('configured')
         ? error.message
-        : 'Failed to analyze food image',
+        : inputType === 'manual'
+          ? 'Failed to analyze manual food log'
+          : 'Failed to analyze food image',
     });
   }
 }

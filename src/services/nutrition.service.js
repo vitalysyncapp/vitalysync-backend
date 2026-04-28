@@ -80,11 +80,54 @@ export async function detectFoodsFromImage({ buffer, mimetype }) {
           {
             type: 'input_text',
             text:
-              'Identify visible edible foods in this meal photo. Return strict JSON only with this shape: {"foods":[{"food_name":"string","estimated_quantity":number,"unit":"g | cup | piece | serving","confidence":number}]}. Use common USDA-searchable food names. If unsure, return the best estimate with lower confidence.',
+              'Identify visible edible foods in this meal photo. The system is deployed in the Philippines. Prioritize recognition of Filipino and Southeast Asian foods such as adobo, sinigang, sisig, pancit, lumpia, silog meals, rice-based meals, and common home-cooked dishes. Return strict JSON only with this shape: {"foods":[{"food_name":"string","estimated_quantity":number,"unit":"g | cup | piece | serving","confidence":number}]}. Use common USDA-searchable food names. When uncertain, return the most likely dish as the top guess for every dish in a single image if there are multiple dishes, using lower confidence when appropriate.',
           },
           {
             type: 'input_image',
             image_url: dataUrl,
+          },
+        ],
+      },
+    ],
+    text: {
+      format: {
+        type: 'json_object',
+      },
+    },
+  });
+
+  const parsed = extractJsonObject(response.output_text);
+  return normalizeDetectedFoods(parsed);
+}
+
+export async function detectFoodsFromManualInput({ meals }) {
+  const client = getOpenAIClient();
+  const cleanedMeals = Array.isArray(meals)
+    ? meals
+      .map((meal) => ({
+        meal_name: String(meal?.meal_name ?? '').trim(),
+        quantity: String(meal?.quantity ?? '').trim(),
+        notes: String(meal?.notes ?? '').trim(),
+      }))
+      .filter((meal) => meal.meal_name.length > 0)
+      .slice(0, 8)
+    : [];
+
+  if (cleanedMeals.length === 0) {
+    return [];
+  }
+
+  const response = await client.responses.create({
+    model: process.env.OPENAI_NUTRITION_MODEL || DEFAULT_OPENAI_MODEL,
+    input: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text:
+              'Estimate edible foods from this manual nutrition log. Return strict JSON only with this shape: {"foods":[{"food_name":"string","estimated_quantity":number,"unit":"g | cup | piece | serving","confidence":number}]}. Use common USDA-searchable food names. Quantity and notes may be approximate; make the best practical estimate and lower confidence when uncertain.\n\nManual log entries:\n' +
+              JSON.stringify(cleanedMeals),
           },
         ],
       },
