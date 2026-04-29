@@ -1,4 +1,7 @@
 import pool from '../config/db.js';
+import {
+  getAdaptiveNudgeRecommendations
+} from '../services/adaptiveNudgeService.js';
 
 const ALLOWED_NUDGE_STATUSES = new Set([
   'shown',
@@ -27,6 +30,19 @@ function parseLimitedInt(value, fallback = 20, max = 50) {
   }
 
   return Math.min(parsed, max);
+}
+
+function parseBoundedInt(value, fallback, min, max) {
+  if (value == null || value === '') {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    return undefined;
+  }
+
+  return parsed;
 }
 
 function normalizeNullableText(value) {
@@ -128,9 +144,15 @@ function formatReminderPreferences(row) {
     daily_log_reminder_time: row.daily_log_reminder_time,
     weekly_pulse_reminder_day: row.weekly_pulse_reminder_day,
     weekly_pulse_reminder_time: row.weekly_pulse_reminder_time,
+    hydration_start_time: row.hydration_start_time,
+    hydration_end_time: row.hydration_end_time,
+    hydration_interval_minutes: row.hydration_interval_minutes,
+    sleep_wind_down_time: row.sleep_wind_down_time,
     hydration_reminder_enabled: row.hydration_reminder_enabled == true,
     recovery_reminder_enabled: row.recovery_reminder_enabled == true,
     sleep_wind_down_enabled: row.sleep_wind_down_enabled == true,
+    nudge_cooldown_hours: row.nudge_cooldown_hours,
+    max_daily_nudges: row.max_daily_nudges,
     created_at: row.created_at,
     updated_at: row.updated_at
   };
@@ -181,6 +203,38 @@ export async function getReminderPreferences(req, res) {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    if (status === 'scheduled' && scheduledFor) {
+      const existing = await pool.query(
+        `SELECT
+           notification_event_id,
+           user_id,
+           notification_type,
+           title,
+           body,
+           scheduled_for,
+           sent_at,
+           status,
+           metadata,
+           created_at,
+           updated_at
+         FROM notification_events
+         WHERE user_id = $1
+           AND notification_type = $2
+           AND scheduled_for = $3
+           AND status = 'scheduled'
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [userId, notificationType, scheduledFor]
+      );
+
+      if (existing.rowCount > 0) {
+        return res.status(200).json({
+          message: 'Notification event already scheduled',
+          event: formatNotificationEvent(existing.rows[0])
+        });
+      }
+    }
+
     const result = await pool.query(
       `INSERT INTO user_reminder_preferences (user_id)
        VALUES ($1)
@@ -190,9 +244,15 @@ export async function getReminderPreferences(req, res) {
          daily_log_reminder_time,
          weekly_pulse_reminder_day,
          weekly_pulse_reminder_time,
+         hydration_start_time,
+         hydration_end_time,
+         hydration_interval_minutes,
+         sleep_wind_down_time,
          hydration_reminder_enabled,
          recovery_reminder_enabled,
          sleep_wind_down_enabled,
+         nudge_cooldown_hours,
+         max_daily_nudges,
          created_at,
          updated_at`,
       [userId]
@@ -213,6 +273,22 @@ export async function saveReminderPreferences(req, res) {
   const dailyLogReminderTime = normalizeTime(body.daily_log_reminder_time);
   const weeklyPulseReminderDay = parseWeekday(body.weekly_pulse_reminder_day);
   const weeklyPulseReminderTime = normalizeTime(body.weekly_pulse_reminder_time);
+  const hydrationStartTime = normalizeTime(body.hydration_start_time);
+  const hydrationEndTime = normalizeTime(body.hydration_end_time);
+  const hydrationIntervalMinutes = parseBoundedInt(
+    body.hydration_interval_minutes,
+    120,
+    30,
+    360
+  );
+  const sleepWindDownTime = normalizeTime(body.sleep_wind_down_time);
+  const nudgeCooldownHours = parseBoundedInt(
+    body.nudge_cooldown_hours,
+    6,
+    1,
+    48
+  );
+  const maxDailyNudges = parseBoundedInt(body.max_daily_nudges, 3, 1, 10);
   const hydrationReminderEnabled = parseOptionalBoolean(
     body.hydration_reminder_enabled
   );
@@ -239,6 +315,36 @@ export async function saveReminderPreferences(req, res) {
     return res.status(400).json({ message: 'Valid weekly_pulse_reminder_time is required' });
   }
 
+  if (hydrationStartTime === undefined) {
+    return res.status(400).json({ message: 'Valid hydration_start_time is required' });
+  }
+
+  if (hydrationEndTime === undefined) {
+    return res.status(400).json({ message: 'Valid hydration_end_time is required' });
+  }
+
+  if (hydrationIntervalMinutes === undefined) {
+    return res.status(400).json({
+      message: 'hydration_interval_minutes must be between 30 and 360'
+    });
+  }
+
+  if (sleepWindDownTime === undefined) {
+    return res.status(400).json({ message: 'Valid sleep_wind_down_time is required' });
+  }
+
+  if (nudgeCooldownHours === undefined) {
+    return res.status(400).json({
+      message: 'nudge_cooldown_hours must be between 1 and 48'
+    });
+  }
+
+  if (maxDailyNudges === undefined) {
+    return res.status(400).json({
+      message: 'max_daily_nudges must be between 1 and 10'
+    });
+  }
+
   if (
     hydrationReminderEnabled === undefined ||
     recoveryReminderEnabled === undefined ||
@@ -259,28 +365,60 @@ export async function saveReminderPreferences(req, res) {
          daily_log_reminder_time,
          weekly_pulse_reminder_day,
          weekly_pulse_reminder_time,
+         hydration_start_time,
+         hydration_end_time,
+         hydration_interval_minutes,
+         sleep_wind_down_time,
          hydration_reminder_enabled,
          recovery_reminder_enabled,
-         sleep_wind_down_enabled
+         sleep_wind_down_enabled,
+         nudge_cooldown_hours,
+         max_daily_nudges
        )
-       VALUES ($1, $2, $3, $4, COALESCE($5, TRUE), COALESCE($6, TRUE), COALESCE($7, TRUE))
+       VALUES (
+         $1,
+         COALESCE($2, '20:00'::time),
+         COALESCE($3, 1),
+         COALESCE($4, '18:00'::time),
+         COALESCE($5, '07:00'::time),
+         COALESCE($6, '21:00'::time),
+         COALESCE($7, 120),
+         COALESCE($8, '21:30'::time),
+         COALESCE($9, TRUE),
+         COALESCE($10, TRUE),
+         COALESCE($11, TRUE),
+         COALESCE($12, 6),
+         COALESCE($13, 3)
+       )
        ON CONFLICT (user_id)
        DO UPDATE SET
          daily_log_reminder_time = EXCLUDED.daily_log_reminder_time,
          weekly_pulse_reminder_day = EXCLUDED.weekly_pulse_reminder_day,
          weekly_pulse_reminder_time = EXCLUDED.weekly_pulse_reminder_time,
+         hydration_start_time = EXCLUDED.hydration_start_time,
+         hydration_end_time = EXCLUDED.hydration_end_time,
+         hydration_interval_minutes = EXCLUDED.hydration_interval_minutes,
+         sleep_wind_down_time = EXCLUDED.sleep_wind_down_time,
          hydration_reminder_enabled = EXCLUDED.hydration_reminder_enabled,
          recovery_reminder_enabled = EXCLUDED.recovery_reminder_enabled,
          sleep_wind_down_enabled = EXCLUDED.sleep_wind_down_enabled,
+         nudge_cooldown_hours = EXCLUDED.nudge_cooldown_hours,
+         max_daily_nudges = EXCLUDED.max_daily_nudges,
          updated_at = NOW()
        RETURNING
          user_id,
          daily_log_reminder_time,
          weekly_pulse_reminder_day,
          weekly_pulse_reminder_time,
+         hydration_start_time,
+         hydration_end_time,
+         hydration_interval_minutes,
+         sleep_wind_down_time,
          hydration_reminder_enabled,
          recovery_reminder_enabled,
          sleep_wind_down_enabled,
+         nudge_cooldown_hours,
+         max_daily_nudges,
          created_at,
          updated_at`,
       [
@@ -288,9 +426,15 @@ export async function saveReminderPreferences(req, res) {
         dailyLogReminderTime,
         weeklyPulseReminderDay,
         weeklyPulseReminderTime,
+        hydrationStartTime,
+        hydrationEndTime,
+        hydrationIntervalMinutes,
+        sleepWindDownTime,
         hydrationReminderEnabled,
         recoveryReminderEnabled,
-        sleepWindDownEnabled
+        sleepWindDownEnabled,
+        nudgeCooldownHours,
+        maxDailyNudges
       ]
     );
 
@@ -301,6 +445,46 @@ export async function saveReminderPreferences(req, res) {
   } catch (error) {
     console.error('Save reminder preferences error:', error);
     return res.status(500).json({ message: 'Failed to save reminder preferences' });
+  }
+}
+
+export async function getNudgeRecommendations(req, res) {
+  const userId = parsePositiveInt(req.query.user_id);
+  const limit = parseLimitedInt(req.query.limit, 3, 5);
+  const recordShown = req.query.record == null
+    ? true
+    : parseOptionalBoolean(req.query.record);
+
+  if (!userId) {
+    return res.status(400).json({ message: 'Valid user_id is required' });
+  }
+
+  if (recordShown === undefined) {
+    return res.status(400).json({ message: 'Valid record flag is required' });
+  }
+
+  try {
+    const userExists = await ensureUserExists(pool, userId);
+    if (!userExists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const result = await getAdaptiveNudgeRecommendations(pool, userId, {
+      limit,
+      recordShown
+    });
+    const primaryRecommendation = result.recommendations[0] ?? null;
+
+    return res.status(200).json({
+      recommendations: result.recommendations,
+      primary_recommendation: primaryRecommendation,
+      adaptive_state: result.summary.adaptive_state,
+      patterns: result.summary.patterns,
+      generated_at: result.summary.generated_at
+    });
+  } catch (error) {
+    console.error('Get nudge recommendations error:', error);
+    return res.status(500).json({ message: 'Failed to fetch nudge recommendations' });
   }
 }
 

@@ -1,4 +1,8 @@
 import pool from '../config/db.js';
+import {
+  upsertBurnoutScoreForDate,
+  upsertBurnoutScoresForWeek
+} from '../services/burnoutScoringService.js';
 
 const ALLOWED_WORKLOAD_HOURS_BANDS = new Set([
   'None',
@@ -542,12 +546,20 @@ export async function saveDailyLog(req, res) {
 
     await client.query('COMMIT');
 
+    let burnoutScore = null;
+    try {
+      burnoutScore = await upsertBurnoutScoreForDate(pool, userId, logDate);
+    } catch (scoreError) {
+      console.error('Daily burnout score refresh error:', scoreError);
+    }
+
     return res.status(isRedo ? 200 : 201).json({
       message: isRedo
         ? 'Daily log updated successfully'
         : 'Daily log saved successfully',
       is_redo: isRedo,
       log: savedLogResult.rows[0],
+      burnout_score: burnoutScore,
       streak: formatStreakPayload(currentStreakRow.rows[0])
     });
   } catch (error) {
@@ -695,9 +707,22 @@ export async function saveWeeklyPulse(req, res) {
       ]
     );
 
+    let burnoutScoresUpdated = 0;
+    try {
+      const updatedScores = await upsertBurnoutScoresForWeek(
+        pool,
+        userId,
+        weekStartDate
+      );
+      burnoutScoresUpdated = updatedScores.length;
+    } catch (scoreError) {
+      console.error('Weekly pulse burnout score refresh error:', scoreError);
+    }
+
     return res.status(200).json({
       message: 'Weekly pulse saved successfully',
       week_start_date: weekStartDate,
+      burnout_scores_updated: burnoutScoresUpdated,
       response: result.rows[0]
     });
   } catch (error) {

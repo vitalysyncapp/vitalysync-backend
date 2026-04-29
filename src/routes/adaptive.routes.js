@@ -3,6 +3,7 @@ import express from 'express';
 import {
   createNotificationEvent,
   createNudgeEvent,
+  getNudgeRecommendations,
   getReminderPreferences,
   listNotificationEvents,
   listNudgeEvents,
@@ -15,6 +16,8 @@ const router = express.Router();
 
 router.get('/reminders', getReminderPreferences);
 router.put('/reminders', saveReminderPreferences);
+
+router.get('/nudges/recommendations', getNudgeRecommendations);
 
 router.get('/nudge-events', listNudgeEvents);
 router.post('/nudge-events', createNudgeEvent);
