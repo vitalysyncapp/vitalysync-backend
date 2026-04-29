@@ -1,3 +1,4 @@
+import { enhanceNudgeRecommendations } from './aiNudgeService.js';
 import { getBurnoutPatternSummary } from './burnoutPatternService.js';
 
 const PRIORITY_RANK = {
@@ -464,7 +465,7 @@ async function attachShownEvent(client, userId, recommendation, preferences) {
 export async function getAdaptiveNudgeRecommendations(
   client,
   userId,
-  { limit = 3, recordShown = true, endDate } = {}
+  { limit = 3, recordShown = true, endDate, useAi = false } = {}
 ) {
   const normalizedLimit = boundedLimit(limit);
   const summary = await getBurnoutPatternSummary(client, userId, { endDate });
@@ -485,18 +486,29 @@ export async function getAdaptiveNudgeRecommendations(
     0,
     normalizedLimit
   );
+  const recommendations = useAi
+    ? await enhanceNudgeRecommendations(client, userId, ranked, {
+      summary,
+      preferences
+    })
+    : ranked;
 
-  if (!recordShown || ranked.length === 0) {
+  if (!recordShown || recommendations.length === 0) {
     return {
       summary,
-      recommendations: ranked
+      recommendations
     };
   }
 
-  const primary = await attachShownEvent(client, userId, ranked[0], preferences);
+  const primary = await attachShownEvent(
+    client,
+    userId,
+    recommendations[0],
+    preferences
+  );
 
   return {
     summary,
-    recommendations: [primary, ...ranked.slice(1)]
+    recommendations: [primary, ...recommendations.slice(1)]
   };
 }

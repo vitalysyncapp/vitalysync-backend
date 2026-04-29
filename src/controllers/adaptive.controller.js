@@ -454,6 +454,9 @@ export async function getNudgeRecommendations(req, res) {
   const recordShown = req.query.record == null
     ? true
     : parseOptionalBoolean(req.query.record);
+  const useAi = req.query.ai == null
+    ? false
+    : parseOptionalBoolean(req.query.ai);
 
   if (!userId) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -461,6 +464,10 @@ export async function getNudgeRecommendations(req, res) {
 
   if (recordShown === undefined) {
     return res.status(400).json({ message: 'Valid record flag is required' });
+  }
+
+  if (useAi === undefined) {
+    return res.status(400).json({ message: 'Valid ai flag is required' });
   }
 
   try {
@@ -471,7 +478,8 @@ export async function getNudgeRecommendations(req, res) {
 
     const result = await getAdaptiveNudgeRecommendations(pool, userId, {
       limit,
-      recordShown
+      recordShown,
+      useAi
     });
     const primaryRecommendation = result.recommendations[0] ?? null;
 
@@ -480,6 +488,9 @@ export async function getNudgeRecommendations(req, res) {
       primary_recommendation: primaryRecommendation,
       adaptive_state: result.summary.adaptive_state,
       patterns: result.summary.patterns,
+      ai_enhanced: result.recommendations.some(
+        (recommendation) => recommendation.metadata?.ai_enhanced === true
+      ),
       generated_at: result.summary.generated_at
     });
   } catch (error) {
