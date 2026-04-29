@@ -4,11 +4,11 @@ import OpenAI from 'openai';
 
 const DEFAULT_OPENAI_NUDGE_MODEL = 'gpt-5.4-mini';
 const PROMPT_VERSION = 'ai_nudge_v1';
-const MAX_TITLE_LENGTH = 72;
-const MAX_MESSAGE_LENGTH = 220;
-const MAX_WHY_LENGTH = 180;
-const MAX_ACTION_LENGTH = 80;
-const MAX_SAFETY_LENGTH = 160;
+const MAX_TITLE_LENGTH = 48;
+const MAX_MESSAGE_LENGTH = 135;
+const MAX_WHY_LENGTH = 95;
+const MAX_ACTION_LENGTH = 42;
+const MAX_SAFETY_LENGTH = 100;
 
 let openaiClient = null;
 
@@ -81,9 +81,9 @@ function normalizeActionSteps(value) {
   }
 
   return value
-    .map((step) => truncate(step, 90))
+    .map((step) => truncate(step, 58))
     .filter((step) => step.length > 0)
-    .slice(0, 3);
+    .slice(0, 2);
 }
 
 function containsUnsafeDiagnosisLanguage(payload) {
@@ -264,7 +264,7 @@ export async function enhanceNudgeRecommendation(
             {
               type: 'input_text',
               text:
-                'You improve wellness nudge copy for VitalySync. You must preserve the deterministic risk, priority, trigger, and recommended focus. Do not diagnose burnout. Do not invent data. Keep advice behavioral, specific, brief, and realistic. Use Maslach burnout theory only as framing: emotional exhaustion, detachment, and reduced accomplishment. Return JSON only.'
+                'You write short, human wellness nudges for VitalySync. Preserve deterministic risk, priority, trigger, and focus. Do not diagnose burnout. Do not invent data. Sound warm, direct, and natural, not clinical. Keep it brief: one clear sentence for message, one short reason, max two tiny action steps. Return JSON only.'
             }
           ]
         },
@@ -274,7 +274,7 @@ export async function enhanceNudgeRecommendation(
             {
               type: 'input_text',
               text:
-                'Rewrite this deterministic nudge into a more useful, creative, supportive recommendation while staying inside the supplied context.\n\nContext JSON:\n' +
+                'Rewrite this nudge so it feels personal, concise, and easy to act on. No long explanations. No generic wellness lecture. Stay inside the supplied context.\n\nContext JSON:\n' +
                 JSON.stringify(context)
             }
           ]

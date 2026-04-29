@@ -291,6 +291,77 @@ export async function getLatestLog(req, res) {
   }
 }
 
+export async function getLogHistory(req, res) {
+  const userId = Number(req.query.user_id);
+  const startDate = String(req.query.start ?? '').trim();
+  const endDate = String(req.query.end ?? '').trim();
+  const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 90);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Valid user_id is required' });
+  }
+
+  if (startDate && !isValidDateString(startDate)) {
+    return res.status(400).json({ message: 'Valid start date is required' });
+  }
+
+  if (endDate && !isValidDateString(endDate)) {
+    return res.status(400).json({ message: 'Valid end date is required' });
+  }
+
+  try {
+    const params = [userId];
+    const filters = ['user_id = $1'];
+
+    if (startDate) {
+      params.push(startDate);
+      filters.push(`log_date >= $${params.length}`);
+    }
+
+    if (endDate) {
+      params.push(endDate);
+      filters.push(`log_date <= $${params.length}`);
+    }
+
+    params.push(limit);
+
+    const historyResult = await pool.query(
+      `SELECT
+         log_id,
+         user_id,
+         log_date,
+         sleep_hours,
+         sleep_quality,
+         mood_index,
+         energy_level,
+         hydration_liters,
+         workload_hours_band,
+         perceived_stress_level,
+         break_quality_level,
+         exercise_names,
+         symptom_names,
+         exercise_goal_name,
+         exercise_goal_completed,
+         exercise_goal_source,
+         exercise_goal_status,
+         created_at,
+         updated_at
+       FROM daily_logs
+       WHERE ${filters.join(' AND ')}
+       ORDER BY log_date DESC
+       LIMIT $${params.length}`,
+      params
+    );
+
+    return res.status(200).json({
+      logs: historyResult.rows.reverse()
+    });
+  } catch (error) {
+    console.error('Get log history error:', error);
+    return res.status(500).json({ message: 'Failed to fetch log history' });
+  }
+}
+
 export async function saveDailyLog(req, res) {
   const {
     user_id: rawUserId,
