@@ -3,11 +3,11 @@ import crypto from 'crypto';
 import OpenAI from 'openai';
 
 const DEFAULT_OPENAI_NUDGE_MODEL = 'gpt-5.4-mini';
-const PROMPT_VERSION = 'ai_nudge_v1';
+const PROMPT_VERSION = 'ai_nudge_v2';
 const MAX_TITLE_LENGTH = 48;
-const MAX_MESSAGE_LENGTH = 135;
-const MAX_WHY_LENGTH = 95;
-const MAX_ACTION_LENGTH = 42;
+const MAX_MESSAGE_LENGTH = 180;
+const MAX_WHY_LENGTH = 120;
+const MAX_ACTION_LENGTH = 52;
 const MAX_SAFETY_LENGTH = 100;
 
 let openaiClient = null;
@@ -264,7 +264,7 @@ export async function enhanceNudgeRecommendation(
             {
               type: 'input_text',
               text:
-                'You write short, human wellness nudges for VitalySync. Preserve deterministic risk, priority, trigger, and focus. Do not diagnose burnout. Do not invent data. Sound warm, direct, and natural, not clinical. Keep it brief: one clear sentence for message, one short reason, max two tiny action steps. Return JSON only.'
+                'You write short, human wellness nudges for VitalySync. Preserve deterministic risk, priority, trigger, and focus. Do not diagnose burnout. Do not invent data. Sound warm, direct, and natural, not clinical. Use plain everyday language that is easy to understand on a quick read. Keep it brief: one complete message sentence, one short reason sentence, and at most two small action steps. Keep the message objective and based only on the supplied trend or pattern. Avoid hype, vague encouragement, or generic wellness advice. Return JSON only.'
             }
           ]
         },
@@ -274,7 +274,7 @@ export async function enhanceNudgeRecommendation(
             {
               type: 'input_text',
               text:
-                'Rewrite this nudge so it feels personal, concise, and easy to act on. No long explanations. No generic wellness lecture. Stay inside the supplied context.\n\nContext JSON:\n' +
+                'Rewrite this nudge so it feels personal, concise, and easy to act on. Use complete thoughts, not fragments. Make the wording more human and understandable while staying objective. No long explanations. No generic wellness lecture. Stay inside the supplied context.\n\nContext JSON:\n' +
                 JSON.stringify(context)
             }
           ]
@@ -365,12 +365,12 @@ export async function enhanceNudgeRecommendations(
   client,
   userId,
   recommendations,
-  { summary, preferences }
+  { summary, preferences, enhanceThrottled = false }
 ) {
   const enhanced = [];
 
   for (const recommendation of recommendations) {
-    if (recommendation.metadata?.throttled === true) {
+    if (recommendation.metadata?.throttled === true && !enhanceThrottled) {
       enhanced.push(recommendation);
       continue;
     }

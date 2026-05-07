@@ -489,7 +489,8 @@ export async function getAdaptiveNudgeRecommendations(
   const recommendations = useAi
     ? await enhanceNudgeRecommendations(client, userId, ranked, {
       summary,
-      preferences
+      preferences,
+      enhanceThrottled: !recordShown
     })
     : ranked;
 
