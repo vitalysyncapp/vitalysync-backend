@@ -193,6 +193,7 @@ export async function getTodayLog(req, res) {
          break_quality_level,
          exercise_names,
          symptom_names,
+         habit_names,
          exercise_goal_name,
          exercise_goal_completed,
          exercise_goal_source,
@@ -267,6 +268,7 @@ export async function getLatestLog(req, res) {
          break_quality_level,
          exercise_names,
          symptom_names,
+         habit_names,
          exercise_goal_name,
          exercise_goal_completed,
          exercise_goal_source,
@@ -340,6 +342,7 @@ export async function getLogHistory(req, res) {
          break_quality_level,
          exercise_names,
          symptom_names,
+         habit_names,
          exercise_goal_name,
          exercise_goal_completed,
          exercise_goal_source,
@@ -376,6 +379,7 @@ export async function saveDailyLog(req, res) {
     break_quality_level: breakQualityLevel,
     exercise_names: exerciseNames,
     symptom_names: symptomNames,
+    habit_names: habitNames,
     exercise_goal_name: exerciseGoalName,
     exercise_goal_completed: exerciseGoalCompleted,
     exercise_goal_source: exerciseGoalSource,
@@ -385,6 +389,8 @@ export async function saveDailyLog(req, res) {
   const userId = Number(rawUserId);
   const normalizedExercises = normalizeStringArray(exerciseNames);
   const normalizedSymptoms = normalizeStringArray(symptomNames);
+  const normalizedHabits = normalizeStringArray(habitNames);
+  const hasHabitNamesPayload = Array.isArray(habitNames);
   const rawWorkloadHoursBand = normalizeNullableText(workloadHoursBand);
   const normalizedWorkloadHoursBand = normalizeWorkloadHoursBand(workloadHoursBand);
   const normalizedPerceivedStressLevel = parseLikert(perceivedStressLevel);
@@ -490,6 +496,7 @@ export async function saveDailyLog(req, res) {
              exercise_goal_completed = COALESCE($14, exercise_goal_completed),
              exercise_goal_source = COALESCE($15, exercise_goal_source),
              exercise_goal_status = COALESCE($16, exercise_goal_status),
+             habit_names = CASE WHEN $17 THEN $18::TEXT[] ELSE habit_names END,
              updated_at = NOW()
          WHERE user_id = $1 AND log_date = $2`,
         [
@@ -508,7 +515,9 @@ export async function saveDailyLog(req, res) {
           normalizedExerciseGoalName,
           normalizedExerciseGoalCompleted,
           normalizedExerciseGoalSource,
-          normalizedExerciseGoalStatus
+          normalizedExerciseGoalStatus,
+          hasHabitNamesPayload,
+          normalizedHabits
         ]
       );
     } else {
@@ -529,11 +538,12 @@ export async function saveDailyLog(req, res) {
            exercise_goal_name,
            exercise_goal_completed,
            exercise_goal_source,
-           exercise_goal_status
+           exercise_goal_status,
+           habit_names
          )
          VALUES (
            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-           $11, $12, $13, COALESCE($14, FALSE), $15, $16
+           $11, $12, $13, COALESCE($14, FALSE), $15, $16, $17::TEXT[]
          )`,
         [
           userId,
@@ -551,7 +561,8 @@ export async function saveDailyLog(req, res) {
           normalizedExerciseGoalName,
           normalizedExerciseGoalCompleted,
           normalizedExerciseGoalSource,
-          normalizedExerciseGoalStatus
+          normalizedExerciseGoalStatus,
+          normalizedHabits
         ]
       );
 
@@ -601,6 +612,7 @@ export async function saveDailyLog(req, res) {
          exercise_goal_completed,
          exercise_goal_source,
          exercise_goal_status,
+         habit_names,
          created_at,
          updated_at
        FROM daily_logs

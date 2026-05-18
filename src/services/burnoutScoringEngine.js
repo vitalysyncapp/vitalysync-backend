@@ -1,7 +1,7 @@
 const EMOTIONAL_EXHAUSTION_KEYS = ['ee_01', 'ee_02', 'ee_03', 'ee_04', 'ee_05'];
 const DEPERSONALIZATION_KEYS = ['dp_01', 'dp_02', 'dp_03', 'dp_04', 'dp_05'];
 const PERSONAL_ACCOMPLISHMENT_KEYS = ['pa_01', 'pa_02', 'pa_03', 'pa_04', 'pa_05'];
-const PHASE_TWO_SCORING_VERSION = 'phase2_v1';
+const PHASE_TWO_SCORING_VERSION = 'phase2_v2';
 
 const WORKLOAD_HOURS_BAND_RISK = {
   None: 0,
@@ -23,6 +23,7 @@ const EXPECTED_DAILY_SCORE_FIELDS = [
   'daily_logs.perceived_stress_level',
   'daily_logs.break_quality_level',
   'daily_logs.symptom_names',
+  'daily_logs.habit_names',
   'weekly_pulse_responses.productivity_focus_level',
   'weekly_pulse_responses.recovery_rest_level',
   'weekly_pulse_responses.detachment_level',
@@ -181,6 +182,26 @@ function symptomsRisk(symptoms) {
   return clamp(score, 0, 75);
 }
 
+function habitRecoveryRisk(habits) {
+  if (!Array.isArray(habits) || habits.length === 0) {
+    return null;
+  }
+
+  const normalized = habits.map((item) => String(item).trim().toLowerCase());
+  if (normalized.includes('none')) {
+    return 60;
+  }
+
+  const count = new Set(normalized).size;
+  if (count >= 3) {
+    return 5;
+  }
+  if (count === 2) {
+    return 12;
+  }
+  return 25;
+}
+
 function workloadBandRisk(value) {
   const normalized = String(value ?? '').trim();
   return Object.prototype.hasOwnProperty.call(WORKLOAD_HOURS_BAND_RISK, normalized)
@@ -266,6 +287,7 @@ function presentFieldMap(inputs) {
     'daily_logs.perceived_stress_level': dailyLog?.perceived_stress_level,
     'daily_logs.break_quality_level': dailyLog?.break_quality_level,
     'daily_logs.symptom_names': dailyLog?.symptom_names,
+    'daily_logs.habit_names': dailyLog?.habit_names,
     'weekly_pulse_responses.productivity_focus_level':
       weeklyPulse?.productivity_focus_level,
     'weekly_pulse_responses.recovery_rest_level':
@@ -319,6 +341,9 @@ function compactSourceSnapshot(inputs, risks) {
           break_quality_level: toIntegerOrNull(dailyLog.break_quality_level),
           symptom_count: Array.isArray(dailyLog.symptom_names)
             ? dailyLog.symptom_names.filter((item) => item !== 'None').length
+            : null,
+          habit_count: Array.isArray(dailyLog.habit_names)
+            ? dailyLog.habit_names.filter((item) => item !== 'None').length
             : null
         }
       : null,
@@ -371,6 +396,12 @@ function buildContributingFactors(scores, risks) {
       key: 'recovery_deficit',
       label: 'Recovery deficit',
       score: scores.recoveryDeficitScore,
+      direction: 'higher_increases_risk'
+    },
+    {
+      key: 'recovery_habits',
+      label: 'Recovery habits',
+      score: risks.habitRecoveryRisk,
       direction: 'higher_increases_risk'
     },
     {
@@ -517,6 +548,7 @@ export function calculateDailyBurnoutSnapshot(inputs) {
     energyRisk: riskFromZeroIndexedHighGood(dailyLog?.energy_level, 2),
     hydrationRisk: hydrationRisk(dailyLog?.hydration_liters),
     symptomRisk: symptomsRisk(dailyLog?.symptom_names),
+    habitRecoveryRisk: habitRecoveryRisk(dailyLog?.habit_names),
     breakQualityRisk: riskFromLikertHighGood(dailyLog?.break_quality_level),
     productivityFocusRisk: riskFromLikertHighGood(
       weeklyPulse?.productivity_focus_level
@@ -559,7 +591,8 @@ export function calculateDailyBurnoutSnapshot(inputs) {
     { score: risks.recoveryRestRisk, weight: 0.30 },
     { score: risks.sleepDurationRisk, weight: 0.12 },
     { score: risks.hydrationRisk, weight: 0.08 },
-    { score: risks.activityRisk, weight: 0.10 }
+    { score: risks.activityRisk, weight: 0.10 },
+    { score: risks.habitRecoveryRisk, weight: 0.08 }
   ]);
 
   const workloadStrainScore = weightedAverage([

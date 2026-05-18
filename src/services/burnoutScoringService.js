@@ -68,7 +68,8 @@ export async function loadBurnoutScoreInputs(client, userId, scoreDate) {
          workload_hours_band,
          perceived_stress_level,
          break_quality_level,
-         symptom_names
+         symptom_names,
+         habit_names
        FROM daily_logs
        WHERE user_id = $1 AND log_date = $2`,
       [userId, normalizedScoreDate]
