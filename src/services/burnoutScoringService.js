@@ -45,6 +45,9 @@ export function formatBurnoutScoreRow(row) {
   };
 }
 
+const DAILY_LOG_BACKED_SCORE_FILTER =
+  "source_snapshot ? 'daily_log' AND source_snapshot->'daily_log' <> 'null'::jsonb";
+
 export async function loadBurnoutScoreInputs(client, userId, scoreDate) {
   const normalizedScoreDate = formatDateOnly(scoreDate);
   const weekStartDate = getWeekStartDate(normalizedScoreDate);
@@ -123,6 +126,10 @@ export async function loadBurnoutScoreInputs(client, userId, scoreDate) {
 
 export async function upsertBurnoutScoreForDate(client, userId, scoreDate) {
   const inputs = await loadBurnoutScoreInputs(client, userId, scoreDate);
+  if (!inputs.dailyLog) {
+    return null;
+  }
+
   const score = calculateDailyBurnoutSnapshot(inputs);
 
   if (!score) {
@@ -272,6 +279,7 @@ export async function getLatestBurnoutScore(client, userId) {
        updated_at
      FROM burnout_score_history
      WHERE user_id = $1
+       AND ${DAILY_LOG_BACKED_SCORE_FILTER}
      ORDER BY score_date DESC
      LIMIT 1`,
     [userId]
@@ -323,6 +331,7 @@ export async function getBurnoutScoreHistory(
        updated_at
      FROM burnout_score_history
      WHERE ${filters.join(' AND ')}
+       AND ${DAILY_LOG_BACKED_SCORE_FILTER}
      ORDER BY score_date DESC
      LIMIT $${params.length}`,
     params

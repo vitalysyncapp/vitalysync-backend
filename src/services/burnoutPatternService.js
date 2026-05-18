@@ -5,6 +5,8 @@ import {
 
 const PATTERN_WINDOWS = [3, 7, 14, 28];
 const MAX_WINDOW_DAYS = Math.max(...PATTERN_WINDOWS);
+const DAILY_LOG_BACKED_SCORE_FILTER =
+  "source_snapshot ? 'daily_log' AND source_snapshot->'daily_log' <> 'null'::jsonb";
 
 const DIMENSIONS = [
   {
@@ -572,6 +574,7 @@ async function loadScoresForPattern(client, userId, endDate) {
      FROM burnout_score_history
      WHERE user_id = $1
        AND score_date BETWEEN $2 AND $3
+       AND ${DAILY_LOG_BACKED_SCORE_FILTER}
      ORDER BY score_date ASC`,
     [userId, startDate, endDate]
   );
