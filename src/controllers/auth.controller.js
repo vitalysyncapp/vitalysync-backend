@@ -1,5 +1,6 @@
 import bcrypt from 'bcrypt';
 import pool from '../config/db.js';
+import { createAccessToken } from '../services/authToken.service.js';
 
 let authSchemaSupportCache = null;
 let authSchemaSupportFetchedAt = 0;
@@ -280,10 +281,13 @@ export async function signup(req, res) {
 
     const streak = await ensureUserStreak(newUser.rows[0].user_id);
 
+    const token = createAccessToken(newUser.rows[0]);
+
     res.status(201).json({
       message: 'User created successfully',
       user: formatUserPayload(newUser.rows[0]),
-      streak
+      streak,
+      ...token
     });
 
   } catch (err) {
@@ -365,10 +369,13 @@ export async function login(req, res) {
 
     const streak = await ensureUserStreak(user.user_id);
 
+    const token = createAccessToken(user);
+
     res.status(200).json({
       message: 'Login successful',
       user: formatUserPayload(user),
       streak,
+      ...token
     });
   } catch (err) {
     console.error('Login error:', err);

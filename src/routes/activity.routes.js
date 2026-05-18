@@ -1,5 +1,6 @@
 import express from 'express';
 
+import { requireMatchingParamUser } from '../middleware/auth.middleware.js';
 import {
   getActivityHistory,
   getTodayActivity,
@@ -9,8 +10,8 @@ import {
 
 const router = express.Router();
 
-router.get('/history/:userId', getActivityHistory);
-router.get('/today/:userId', getTodayActivity);
+router.get('/history/:userId', requireMatchingParamUser(), getActivityHistory);
+router.get('/today/:userId', requireMatchingParamUser(), getTodayActivity);
 router.post('/save', saveActivityLog);
 router.put('/update', updateActivityLog);
 

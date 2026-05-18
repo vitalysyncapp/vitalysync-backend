@@ -1,5 +1,6 @@
 import express from 'express';
 
+import { requireMatchingParamUser } from '../middleware/auth.middleware.js';
 import {
   cancelExerciseGoal,
   chooseExerciseGoal,
@@ -10,7 +11,7 @@ import {
 
 const router = express.Router();
 
-router.get('/today/:userId', getTodayExerciseGoal);
+router.get('/today/:userId', requireMatchingParamUser(), getTodayExerciseGoal);
 router.post('/choose', chooseExerciseGoal);
 router.put('/progress', updateExerciseGoalProgress);
 router.put('/complete', completeExerciseGoal);

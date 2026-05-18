@@ -1,5 +1,6 @@
 import express from 'express';
 
+import { requireMatchingParamUser } from '../middleware/auth.middleware.js';
 import {
   createOnboarding,
   createPreferences,
@@ -12,12 +13,12 @@ import {
 
 const router = express.Router();
 
-router.get('/status/:userId', getRequiredOnboardingStatus);
+router.get('/status/:userId', requireMatchingParamUser(), getRequiredOnboardingStatus);
 router.post('/submit', submitOnboarding);
-router.get('/:userId', getOnboardingSummary);
+router.get('/:userId', requireMatchingParamUser(), getOnboardingSummary);
 router.post('/', createOnboarding);
-router.put('/:userId', updateOnboarding);
+router.put('/:userId', requireMatchingParamUser(), updateOnboarding);
 router.post('/preferences', createPreferences);
-router.put('/:userId/preferences', updatePreferences);
+router.put('/:userId/preferences', requireMatchingParamUser(), updatePreferences);
 
 export default router;

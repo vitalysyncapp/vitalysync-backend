@@ -1,6 +1,11 @@
 import express from 'express';
 import cors from 'cors';
 
+import {
+  enforceAuthenticatedUser,
+  optionalAuth,
+  requireAuth
+} from './middleware/auth.middleware.js';
 import adaptiveRoutes from './routes/adaptive.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import activityRoutes from './routes/activity.routes.js';
@@ -17,11 +22,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use('/api/adaptive', adaptiveRoutes);
 app.use('/api/auth', authRoutes);
+app.get('/api/health', (_req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    service: 'vitalysync-backend',
+    timestamp: new Date().toISOString()
+  });
+});
+app.use('/api/environment', optionalAuth, enforceAuthenticatedUser, environmentRoutes);
+
+app.use('/api', requireAuth, enforceAuthenticatedUser);
+
+app.use('/api/adaptive', adaptiveRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/burnout', burnoutRoutes);
-app.use('/api/environment', environmentRoutes);
 app.use('/api/exercise-goals', exerciseGoalRoutes);
 app.use('/api/logs', logRoutes);
 app.use('/api/nutrition', nutritionRoutes);

@@ -1,6 +1,10 @@
 import express from 'express';
 
 import {
+  enforceAuthenticatedUser,
+  requireAuth
+} from '../middleware/auth.middleware.js';
+import {
   deleteAccount,
   login,
   signup,
@@ -11,7 +15,7 @@ const router = express.Router();
 
 router.post('/signup', signup);
 router.post('/login', login);
-router.put('/profile', updateProfile);
-router.delete('/account', deleteAccount);
+router.put('/profile', requireAuth, enforceAuthenticatedUser, updateProfile);
+router.delete('/account', requireAuth, enforceAuthenticatedUser, deleteAccount);
 
 export default router;
