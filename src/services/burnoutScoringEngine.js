@@ -253,7 +253,7 @@ export function addDays(dateString, days) {
   return formatDateOnly(date);
 }
 
-function getWeekStartDate(value) {
+export function getWeekStartDate(value) {
   const date = value instanceof Date ? value : new Date(value);
 
   if (Number.isNaN(date.getTime())) {

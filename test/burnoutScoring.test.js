@@ -5,6 +5,7 @@ import {
   burnoutQuestionKeys,
   calculateBurnoutBaselineScore,
   calculateDailyBurnoutSnapshot,
+  getWeekStartDate,
 } from '../src/services/burnoutScoringEngine.js';
 
 function completeBaselineAnswers(value) {
@@ -74,4 +75,9 @@ test('daily burnout scoring uses logs, pulse, activity, profile, and habits', ()
   assert.ok(
     snapshot.missing_fields.every((field) => typeof field === 'string')
   );
+});
+
+test('burnout scoring exposes week start normalization for score refreshes', () => {
+  assert.equal(getWeekStartDate('2026-05-18'), '2026-05-18');
+  assert.equal(getWeekStartDate('2026-05-24'), '2026-05-18');
 });
