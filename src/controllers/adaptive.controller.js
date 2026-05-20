@@ -590,8 +590,8 @@ export async function createNudgeEvent(req, res) {
          acted_at
        )
        VALUES (
-         $1, $2, $3, $4, $5, $6, $7,
-         CASE WHEN $6 = 'shown' THEN NULL ELSE NOW() END
+         $1, $2, $3, $4, $5, $6::varchar, $7,
+         CASE WHEN $6::text = 'shown' THEN NULL ELSE NOW() END
        )
        RETURNING
          nudge_event_id,
@@ -646,8 +646,8 @@ export async function updateNudgeEventStatus(req, res) {
   try {
     const result = await pool.query(
       `UPDATE nudge_events
-       SET status = $3,
-           acted_at = CASE WHEN $3 = 'shown' THEN acted_at ELSE NOW() END,
+       SET status = $3::varchar,
+           acted_at = CASE WHEN $3::text = 'shown' THEN acted_at ELSE NOW() END,
            updated_at = NOW()
        WHERE nudge_event_id = $1 AND user_id = $2
        RETURNING
