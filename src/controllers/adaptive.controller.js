@@ -2,6 +2,10 @@ import pool from '../config/db.js';
 import {
   getAdaptiveNudgeRecommendations
 } from '../services/adaptiveNudgeService.js';
+import {
+  listInsightReports as listInsightReportsForUser,
+  refreshInsightReports as refreshInsightReportsForUser
+} from '../services/insightReportService.js';
 
 const ALLOWED_NUDGE_STATUSES = new Set([
   'shown',
@@ -129,6 +133,15 @@ function normalizeTimestamp(value) {
   return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
 }
 
+function normalizeDateOnly(value) {
+  const normalized = normalizeNullableText(value);
+  if (!normalized) {
+    return null;
+  }
+
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : undefined;
+}
+
 async function ensureUserExists(client, userId) {
   const result = await client.query(
     'SELECT user_id FROM users WHERE user_id = $1',
@@ -201,38 +214,6 @@ export async function getReminderPreferences(req, res) {
     const userExists = await ensureUserExists(pool, userId);
     if (!userExists) {
       return res.status(404).json({ message: 'User not found' });
-    }
-
-    if (status === 'scheduled' && scheduledFor) {
-      const existing = await pool.query(
-        `SELECT
-           notification_event_id,
-           user_id,
-           notification_type,
-           title,
-           body,
-           scheduled_for,
-           sent_at,
-           status,
-           metadata,
-           created_at,
-           updated_at
-         FROM notification_events
-         WHERE user_id = $1
-           AND notification_type = $2
-           AND scheduled_for = $3
-           AND status = 'scheduled'
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        [userId, notificationType, scheduledFor]
-      );
-
-      if (existing.rowCount > 0) {
-        return res.status(200).json({
-          message: 'Notification event already scheduled',
-          event: formatNotificationEvent(existing.rows[0])
-        });
-      }
     }
 
     const result = await pool.query(
@@ -445,6 +426,64 @@ export async function saveReminderPreferences(req, res) {
   } catch (error) {
     console.error('Save reminder preferences error:', error);
     return res.status(500).json({ message: 'Failed to save reminder preferences' });
+  }
+}
+
+export async function listInsightReports(req, res) {
+  const query = req.query ?? {};
+  const userId = parsePositiveInt(query.user_id);
+  const limit = parseLimitedInt(query.limit, 30, 50);
+
+  if (!userId) {
+    return res.status(400).json({ message: 'Valid user_id is required' });
+  }
+
+  try {
+    const userExists = await ensureUserExists(pool, userId);
+    if (!userExists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const reports = await listInsightReportsForUser(pool, userId, { limit });
+
+    return res.status(200).json({ reports });
+  } catch (error) {
+    console.error('List insight reports error:', error);
+    return res.status(500).json({ message: 'Failed to fetch insight reports' });
+  }
+}
+
+export async function refreshInsightReports(req, res) {
+  const body = req.body ?? {};
+  const query = req.query ?? {};
+  const userId = parsePositiveInt(body.user_id ?? query.user_id);
+  const date = normalizeDateOnly(body.date ?? query.date);
+
+  if (!userId) {
+    return res.status(400).json({ message: 'Valid user_id is required' });
+  }
+
+  if (date === undefined) {
+    return res.status(400).json({ message: 'Valid date is required' });
+  }
+
+  try {
+    const userExists = await ensureUserExists(pool, userId);
+    if (!userExists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const reports = await refreshInsightReportsForUser(pool, userId, {
+      date: date ?? undefined
+    });
+
+    return res.status(200).json({
+      message: 'Insight reports refreshed successfully',
+      reports
+    });
+  } catch (error) {
+    console.error('Refresh insight reports error:', error);
+    return res.status(500).json({ message: 'Failed to refresh insight reports' });
   }
 }
 
@@ -765,6 +804,38 @@ export async function createNotificationEvent(req, res) {
     const userExists = await ensureUserExists(pool, userId);
     if (!userExists) {
       return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (status === 'scheduled' && scheduledFor) {
+      const existing = await pool.query(
+        `SELECT
+           notification_event_id,
+           user_id,
+           notification_type,
+           title,
+           body,
+           scheduled_for,
+           sent_at,
+           status,
+           metadata,
+           created_at,
+           updated_at
+         FROM notification_events
+         WHERE user_id = $1
+           AND notification_type = $2
+           AND scheduled_for = $3
+           AND status = 'scheduled'
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [userId, notificationType, scheduledFor]
+      );
+
+      if (existing.rowCount > 0) {
+        return res.status(200).json({
+          message: 'Notification event already scheduled',
+          event: formatNotificationEvent(existing.rows[0])
+        });
+      }
     }
 
     const result = await pool.query(

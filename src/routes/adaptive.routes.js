@@ -5,8 +5,10 @@ import {
   createNudgeEvent,
   getNudgeRecommendations,
   getReminderPreferences,
+  listInsightReports,
   listNotificationEvents,
   listNudgeEvents,
+  refreshInsightReports,
   saveReminderPreferences,
   updateNotificationEventStatus,
   updateNudgeEventStatus
@@ -18,6 +20,9 @@ router.get('/reminders', getReminderPreferences);
 router.put('/reminders', saveReminderPreferences);
 
 router.get('/nudges/recommendations', getNudgeRecommendations);
+
+router.get('/insight-reports', listInsightReports);
+router.post('/insight-reports/refresh', refreshInsightReports);
 
 router.get('/nudge-events', listNudgeEvents);
 router.post('/nudge-events', createNudgeEvent);
