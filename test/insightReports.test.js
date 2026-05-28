@@ -272,11 +272,22 @@ test('daily insight report refresh upserts a daily report', async () => {
   assert.match(client.inserts[0].sql, /ON CONFLICT/);
 });
 
-test('weekly insight report refresh upserts a weekly report', async () => {
+test('weekly insight report refresh skips non-Sunday dates', async () => {
   const client = createInsightReportClient({ weeklyData: true });
 
   const reports = await refreshInsightReports(client, 1, {
     date: '2026-05-21'
+  });
+
+  assert.equal(reports.length, 0);
+  assert.equal(client.inserts.length, 0);
+});
+
+test('weekly insight report refresh upserts a weekly report on Sunday', async () => {
+  const client = createInsightReportClient({ weeklyData: true });
+
+  const reports = await refreshInsightReports(client, 1, {
+    date: '2026-05-24'
   });
 
   assert.equal(reports.length, 1);

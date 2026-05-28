@@ -69,6 +69,7 @@ function buildRecommendation({
       pattern_title: pattern?.title ?? null,
       adaptive_state: summary?.adaptive_state?.state ?? null,
       latest_risk_level: summary?.latest_score?.risk_level ?? null,
+      recommended_focus: recommendedFocus,
       ...metadata
     }
   };
@@ -353,7 +354,40 @@ async function loadRecentNudgeEvents(client, userId) {
   return result.rows;
 }
 
-function applyRecentFeedback(recommendations, recentEvents, preferences) {
+function eventMetadata(event) {
+  if (event?.metadata == null) {
+    return {};
+  }
+
+  if (typeof event.metadata === 'string') {
+    try {
+      const parsed = JSON.parse(event.metadata);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed
+        : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  return typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+    ? event.metadata
+    : {};
+}
+
+function eventMatchesRecommendation(event, recommendation) {
+  if (event.nudge_type === recommendation.nudge_type) {
+    return true;
+  }
+
+  const metadata = eventMetadata(event);
+  return Boolean(
+    recommendation.recommended_focus &&
+    metadata.recommended_focus === recommendation.recommended_focus
+  );
+}
+
+export function applyRecentFeedback(recommendations, recentEvents, preferences) {
   const now = new Date();
   const shownTodayCount = recentEvents.filter((event) =>
     ['shown', 'accepted', 'completed', 'snoozed'].includes(event.status) &&
@@ -365,11 +399,17 @@ function applyRecentFeedback(recommendations, recentEvents, preferences) {
     .map((recommendation) => {
       const sameTypeEvent = recentEvents.find((event) =>
         event.nudge_type === recommendation.nudge_type &&
-        ['shown', 'accepted', 'completed', 'snoozed'].includes(event.status)
+        ['shown', 'completed', 'snoozed'].includes(event.status)
       );
       const dismissedRecently = recentEvents.some((event) =>
-        event.nudge_type === recommendation.nudge_type &&
-        event.status === 'dismissed'
+        eventMatchesRecommendation(event, recommendation) &&
+        event.status === 'dismissed' &&
+        hoursSince(event.created_at, now) < preferences.cooldownHours
+      );
+      const acceptedRecently = recentEvents.some((event) =>
+        eventMatchesRecommendation(event, recommendation) &&
+        ['accepted', 'completed'].includes(event.status) &&
+        hoursSince(event.created_at, now) <= 7 * 24
       );
       const inCooldown =
         sameTypeEvent &&
@@ -390,6 +430,9 @@ function applyRecentFeedback(recommendations, recentEvents, preferences) {
           max_daily_nudges: preferences.maxDailyNudges,
           recent_daily_nudge_count: shownTodayCount,
           recently_dismissed: dismissedRecently,
+          recently_accepted: acceptedRecently,
+          suppressed_by_feedback:
+            dismissedRecently && !isStrongRecommendation(recommendation),
           throttled,
           throttle_reason: throttled
             ? (dailyLimitReached ? 'daily_limit' : 'cooldown')
@@ -399,6 +442,16 @@ function applyRecentFeedback(recommendations, recentEvents, preferences) {
 
       return adjusted;
     })
+    .filter((recommendation, _index, adjusted) => {
+      if (recommendation.metadata?.suppressed_by_feedback !== true) {
+        return true;
+      }
+
+      return !adjusted.some((candidate) =>
+        candidate.nudge_type !== recommendation.nudge_type &&
+        candidate.metadata?.suppressed_by_feedback !== true
+      );
+    })
     .sort((a, b) => {
       const aThrottled = a.metadata?.throttled === true ? 1 : 0;
       const bThrottled = b.metadata?.throttled === true ? 1 : 0;
@@ -406,7 +459,24 @@ function applyRecentFeedback(recommendations, recentEvents, preferences) {
         return aThrottled - bThrottled;
       }
 
-      return PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority];
+      const priorityDiff = PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority];
+      if (priorityDiff !== 0) {
+        return priorityDiff;
+      }
+
+      const aAccepted = a.metadata?.recently_accepted === true ? 1 : 0;
+      const bAccepted = b.metadata?.recently_accepted === true ? 1 : 0;
+      if (aAccepted !== bAccepted) {
+        return bAccepted - aAccepted;
+      }
+
+      const aDismissed = a.metadata?.recently_dismissed === true ? 1 : 0;
+      const bDismissed = b.metadata?.recently_dismissed === true ? 1 : 0;
+      if (aDismissed !== bDismissed) {
+        return aDismissed - bDismissed;
+      }
+
+      return 0;
     });
 }
 

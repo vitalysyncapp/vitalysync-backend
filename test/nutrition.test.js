@@ -11,7 +11,35 @@ import {
   isValidMealType,
   normalizeMealType,
 } from '../src/services/nutrition.service.js';
+import {
+  buildDeterministicNutritionAssistantNudge,
+  buildNutritionAssistantNudgeResponse,
+} from '../src/services/nutritionAssistantNudgeService.js';
 import { createMockResponse } from './controllerTestHelpers.js';
+
+function summary({
+  calories = 500,
+  protein = 25,
+  carbs = 55,
+  fat = 18,
+  foodName = 'rice bowl',
+  meals = null,
+} = {}) {
+  return {
+    day_totals: {
+      total_calories: calories,
+      total_protein_g: protein,
+      total_carbs_g: carbs,
+      total_fat_g: fat,
+    },
+    meals: meals ?? [
+      {
+        meal_type: 'lunch',
+        items: [{ food_name: foodName }],
+      },
+    ],
+  };
+}
 
 test('nutrition helpers validate meal type and date inputs', () => {
   assert.equal(normalizeMealType(' Breakfast '), 'breakfast');
@@ -33,6 +61,96 @@ test('nutrition totals sum calories and macros safely', () => {
     total_carbs_g: 30,
     total_fat_g: 3.75,
   });
+});
+
+test('nutrition assistant nudge recommends protein when protein is low', () => {
+  const insight = buildDeterministicNutritionAssistantNudge({
+    summary: summary({ protein: 5, carbs: 45, fat: 15 }),
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+
+  assert.equal(insight.metadata.macro_focus, 'protein');
+  assert.ok(insight.metadata.recommended_foods.includes('eggs'));
+});
+
+test('nutrition assistant nudge recommends fiber carbs when carbs are low', () => {
+  const insight = buildDeterministicNutritionAssistantNudge({
+    summary: summary({ protein: 40, carbs: 8, fat: 20, foodName: 'egg salad' }),
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+
+  assert.equal(insight.metadata.macro_focus, 'carbs_fiber');
+  assert.ok(insight.metadata.recommended_foods.includes('oats'));
+});
+
+test('nutrition assistant nudge recommends healthy fats when fat is low', () => {
+  const insight = buildDeterministicNutritionAssistantNudge({
+    summary: summary({ protein: 35, carbs: 60, fat: 2, foodName: 'chicken rice tomato' }),
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+
+  assert.equal(insight.metadata.macro_focus, 'healthy_fats');
+  assert.ok(insight.metadata.recommended_foods.includes('avocado'));
+});
+
+test('nutrition assistant nudge balances very high carbs with protein and produce', () => {
+  const insight = buildDeterministicNutritionAssistantNudge({
+    summary: summary({ protein: 28, carbs: 140, fat: 8 }),
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+
+  assert.equal(insight.metadata.macro_focus, 'protein_produce');
+  assert.ok(insight.metadata.recommended_foods.includes('tofu'));
+});
+
+test('nutrition assistant nudge balances very high fat with fiber and produce', () => {
+  const insight = buildDeterministicNutritionAssistantNudge({
+    summary: summary({ protein: 40, carbs: 35, fat: 55, foodName: 'egg pork tomato' }),
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+
+  assert.equal(insight.metadata.macro_focus, 'fiber_produce');
+  assert.ok(insight.metadata.recommended_foods.includes('sweet potato'));
+});
+
+test('nutrition assistant nudge handles no meals logged', () => {
+  const insight = buildDeterministicNutritionAssistantNudge({
+    summary: summary({ calories: 0, protein: 0, carbs: 0, fat: 0, meals: [] }),
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+
+  assert.equal(insight.metadata.macro_focus, 'complete_meal');
+  assert.ok(insight.message.includes('No meals are logged yet'));
+});
+
+test('nutrition assistant nudge suppresses a recently dismissed macro focus', () => {
+  const insight = buildDeterministicNutritionAssistantNudge({
+    summary: summary({ protein: 5, carbs: 45, fat: 15 }),
+    recentEvents: [
+      {
+        status: 'dismissed',
+        created_at: new Date('2026-05-22T11:30:00Z'),
+        metadata: { macro_focus: 'protein' },
+      },
+    ],
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+
+  assert.notEqual(insight.metadata.macro_focus, 'protein');
+});
+
+test('nutrition assistant nudge falls back when AI enhancement fails', async () => {
+  const insight = await buildNutritionAssistantNudgeResponse({
+    summary: summary({ protein: 5, carbs: 45, fat: 15 }),
+    now: new Date('2026-05-22T12:00:00Z'),
+    useAi: true,
+    aiEnhancer: async () => {
+      throw new Error('model unavailable');
+    },
+  });
+
+  assert.equal(insight.metadata.macro_focus, 'protein');
+  assert.equal(insight.metadata.ai_fallback, true);
 });
 
 test('nutrition analysis validates required image input before database work', async () => {

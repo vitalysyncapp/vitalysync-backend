@@ -9,6 +9,9 @@ import {
   normalizeMealType,
   toNumber,
 } from '../services/nutrition.service.js';
+import {
+  getNutritionAssistantNudge as getNutritionAssistantNudgeForUser
+} from '../services/nutritionAssistantNudgeService.js';
 
 function getUserId(req) {
   const rawUserId = req.body?.user_id ?? req.query?.user_id;
@@ -19,6 +22,26 @@ function getUserId(req) {
 async function ensureUserExists(client, userId) {
   const result = await client.query('SELECT user_id FROM users WHERE user_id = $1', [userId]);
   return result.rowCount > 0;
+}
+
+function parseOptionalBoolean(value, fallback = true) {
+  if (value == null || value === '') {
+    return fallback;
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'true') {
+    return true;
+  }
+  if (normalized === 'false') {
+    return false;
+  }
+
+  return undefined;
 }
 
 function normalizeItems(items) {
@@ -452,6 +475,45 @@ export async function getDailyNutrition(req, res) {
   } catch (error) {
     console.error('Get daily nutrition error:', error);
     return res.status(500).json({ message: 'Failed to fetch daily nutrition' });
+  }
+}
+
+export async function getAssistantNutritionNudge(req, res) {
+  const userId = getUserId(req);
+  const logDate = String(
+    req.query?.date ?? new Date().toISOString().slice(0, 10)
+  ).trim();
+  const useAi = parseOptionalBoolean(req.query?.ai, true);
+
+  if (!userId) {
+    return res.status(400).json({ message: 'Valid user_id is required' });
+  }
+
+  if (!isValidDateString(logDate)) {
+    return res.status(400).json({ message: 'Valid date is required' });
+  }
+
+  if (useAi === undefined) {
+    return res.status(400).json({ message: 'Valid ai flag is required' });
+  }
+
+  try {
+    const userExists = await ensureUserExists(pool, userId);
+    if (!userExists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const insight = await getNutritionAssistantNudgeForUser(pool, userId, {
+      date: logDate,
+      useAi
+    });
+
+    return res.status(200).json(insight);
+  } catch (error) {
+    console.error('Get assistant nutrition nudge error:', error);
+    return res.status(500).json({
+      message: 'Failed to fetch nutrition nudge'
+    });
   }
 }
 

@@ -23,6 +23,15 @@ function todayKey() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function isSundayDate(value) {
+  const [year, month, day] = formatDateOnly(value).split('-').map(Number);
+  if (![year, month, day].every(Number.isInteger)) {
+    return false;
+  }
+
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay() === 0;
+}
+
 function toNumber(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -101,10 +110,14 @@ export async function refreshInsightReports(
     reports.push(await upsertInsightReport(client, userId, dailyReport));
   }
 
-  const weekStart = getWeekStartDate(normalizedDate);
-  const weeklyReport = await buildWeeklyReport(client, userId, weekStart);
-  if (weeklyReport) {
-    reports.push(await upsertInsightReport(client, userId, weeklyReport));
+  if (isSundayDate(normalizedDate)) {
+    const weekStart = getWeekStartDate(normalizedDate);
+    if (weekStart) {
+      const weeklyReport = await buildWeeklyReport(client, userId, weekStart);
+      if (weeklyReport) {
+        reports.push(await upsertInsightReport(client, userId, weeklyReport));
+      }
+    }
   }
 
   return reports;

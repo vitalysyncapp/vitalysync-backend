@@ -5,6 +5,7 @@ import {
   analyzeNutrition,
   confirmNutrition,
   discardNutritionAttempt,
+  getAssistantNutritionNudge,
   getDailyNutrition,
   getNutritionHistory,
 } from '../controllers/nutrition.controller.js';
@@ -102,6 +103,7 @@ function uploadImage(req, res, next) {
 router.post('/analyze', uploadImage, analyzeNutrition);
 router.post('/confirm', confirmNutrition);
 router.post('/discard-attempt', discardNutritionAttempt);
+router.get('/assistant-nudge', getAssistantNutritionNudge);
 router.get('/daily', getDailyNutrition);
 router.get('/history', getNutritionHistory);
 
