@@ -393,6 +393,7 @@ export async function saveDailyLog(req, res) {
   const hasHabitNamesPayload = Array.isArray(habitNames);
   const rawWorkloadHoursBand = normalizeNullableText(workloadHoursBand);
   const normalizedWorkloadHoursBand = normalizeWorkloadHoursBand(workloadHoursBand);
+  const normalizedEnergyLevel = parseLikert(energyLevel);
   const normalizedPerceivedStressLevel = parseLikert(perceivedStressLevel);
   const normalizedBreakQualityLevel = parseLikert(breakQualityLevel);
   const normalizedExerciseGoalName = normalizeNullableText(exerciseGoalName);
@@ -420,7 +421,7 @@ export async function saveDailyLog(req, res) {
     return res.status(400).json({ message: 'Valid mood_index is required' });
   }
 
-  if (!Number.isInteger(Number(energyLevel)) || Number(energyLevel) < 0 || Number(energyLevel) > 2) {
+  if (normalizedEnergyLevel == null) {
     return res.status(400).json({ message: 'Valid energy_level is required' });
   }
 
@@ -505,7 +506,7 @@ export async function saveDailyLog(req, res) {
           Number(sleepHours),
           Number(sleepQuality),
           Number(moodIndex),
-          Number(energyLevel),
+          normalizedEnergyLevel,
           Number(hydrationLiters),
           normalizedWorkloadHoursBand,
           normalizedPerceivedStressLevel,
@@ -551,7 +552,7 @@ export async function saveDailyLog(req, res) {
           Number(sleepHours),
           Number(sleepQuality),
           Number(moodIndex),
-          Number(energyLevel),
+          normalizedEnergyLevel,
           Number(hydrationLiters),
           normalizedWorkloadHoursBand,
           normalizedPerceivedStressLevel,

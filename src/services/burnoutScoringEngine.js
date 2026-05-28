@@ -1,7 +1,7 @@
 const EMOTIONAL_EXHAUSTION_KEYS = ['ee_01', 'ee_02', 'ee_03', 'ee_04', 'ee_05'];
 const DEPERSONALIZATION_KEYS = ['dp_01', 'dp_02', 'dp_03', 'dp_04', 'dp_05'];
 const PERSONAL_ACCOMPLISHMENT_KEYS = ['pa_01', 'pa_02', 'pa_03', 'pa_04', 'pa_05'];
-const PHASE_TWO_SCORING_VERSION = 'phase2_v2';
+const PHASE_TWO_SCORING_VERSION = 'phase2_v3';
 
 const WORKLOAD_HOURS_BAND_RISK = {
   None: 0,
@@ -545,7 +545,7 @@ export function calculateDailyBurnoutSnapshot(inputs) {
     sleepDurationRisk: sleepDurationRisk(dailyLog?.sleep_hours),
     sleepQualityRisk: riskFromZeroIndexedHighGood(dailyLog?.sleep_quality, 4),
     moodRisk: riskFromZeroIndexedHighGood(dailyLog?.mood_index, 4),
-    energyRisk: riskFromZeroIndexedHighGood(dailyLog?.energy_level, 2),
+    energyRisk: riskFromLikertHighGood(dailyLog?.energy_level),
     hydrationRisk: hydrationRisk(dailyLog?.hydration_liters),
     symptomRisk: symptomsRisk(dailyLog?.symptom_names),
     habitRecoveryRisk: habitRecoveryRisk(dailyLog?.habit_names),
