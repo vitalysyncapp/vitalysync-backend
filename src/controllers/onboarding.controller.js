@@ -3,7 +3,8 @@ import {
   OnboardingServiceError,
   getOnboardingStatus as fetchRequiredOnboardingStatus,
   getOnboardingSummaryBundle,
-  submitRequiredOnboarding
+  submitRequiredOnboarding,
+  updateUserWellnessProfile
 } from '../services/onboarding.service.js';
 
 const allowedActivityLevels = new Set([
@@ -244,6 +245,23 @@ export async function submitOnboarding(req, res) {
 
     console.error('Submit onboarding error:', error);
     return res.status(500).json({ message: 'Failed to submit onboarding' });
+  }
+}
+
+export async function updateWellnessProfile(req, res) {
+  try {
+    const payload = await updateUserWellnessProfile(req.params.userId, req.body);
+    return res.status(200).json({
+      message: 'Wellness profile updated successfully',
+      ...payload
+    });
+  } catch (error) {
+    if (error instanceof OnboardingServiceError) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+
+    console.error('Update wellness profile error:', error);
+    return res.status(500).json({ message: 'Failed to update wellness profile' });
   }
 }
 

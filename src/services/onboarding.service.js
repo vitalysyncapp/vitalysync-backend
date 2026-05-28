@@ -398,6 +398,19 @@ function exerciseDaysForLegacy(value) {
   }
 }
 
+function workloadLevelFromIntensity(value) {
+  switch (normalizeText(value)) {
+    case 'Low':
+      return 2;
+    case 'High':
+      return 4;
+    case 'Medium':
+      return 3;
+    default:
+      return null;
+  }
+}
+
 function activityLevelForLegacy(lifestyleType) {
   if (lifestyleType === 'Sedentary') {
     return 'Sedentary';
@@ -832,4 +845,252 @@ export async function getUserProfileSummary(userIdValue) {
     onboarding_profile: onboardingProfile,
     baseline_for_ai: buildAiBaseline(onboardingProfile)
   };
+}
+
+export async function updateUserWellnessProfile(userIdValue, payload = {}) {
+  const userId = parseUserId(userIdValue);
+  const role = normalizeText(payload.role);
+  const lifestyleType = normalizeText(payload.lifestyle_type);
+  const usualSleepTime = normalizeTime(payload.usual_sleep_time);
+  const usualWakeTime = normalizeTime(payload.usual_wake_time);
+  const workloadLevel =
+    payload.workload_level == null || payload.workload_level === ''
+      ? workloadLevelFromIntensity(payload.work_intensity)
+      : parseLikert(payload.workload_level, 'workload_level');
+
+  if (!ROLE_OPTIONS.has(role)) {
+    throw new OnboardingServiceError('Invalid role value');
+  }
+
+  if (!LIFESTYLE_OPTIONS.has(lifestyleType)) {
+    throw new OnboardingServiceError('Invalid lifestyle_type value');
+  }
+
+  if (!usualSleepTime) {
+    throw new OnboardingServiceError('Valid usual_sleep_time is required');
+  }
+
+  if (!usualWakeTime) {
+    throw new OnboardingServiceError('Valid usual_wake_time is required');
+  }
+
+  if (workloadLevel == null) {
+    throw new OnboardingServiceError('Valid workload_level is required');
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const userResult = await client.query(
+      'SELECT user_id, wellness_goal FROM users WHERE user_id = $1 FOR UPDATE',
+      [userId]
+    );
+
+    if (userResult.rowCount === 0) {
+      throw new OnboardingServiceError('User not found', 404);
+    }
+
+    const existingProfileResult = await client.query(
+      `SELECT
+         wellness_goal,
+         exercise_goal_days,
+         has_extra_responsibilities,
+         extra_responsibility_level,
+         emotional_exhaustion_score,
+         depersonalization_score,
+         personal_accomplishment_score,
+         initial_burnout_score,
+         initial_burnout_level
+       FROM user_onboarding_profiles
+       WHERE user_id = $1
+       FOR UPDATE`,
+      [userId]
+    );
+    const existingProfile = existingProfileResult.rows[0] ?? {};
+    const wellnessGoal =
+      normalizeText(existingProfile.wellness_goal) ??
+      normalizeText(userResult.rows[0]?.wellness_goal);
+
+    const profileResult = await client.query(
+      `INSERT INTO user_onboarding_profiles (
+         user_id,
+         role,
+         lifestyle_type,
+         wellness_goal,
+         usual_sleep_time,
+         usual_wake_time,
+         exercise_goal_days,
+         workload_level,
+         has_extra_responsibilities,
+         extra_responsibility_level,
+         emotional_exhaustion_score,
+         depersonalization_score,
+         personal_accomplishment_score,
+         initial_burnout_score,
+         initial_burnout_level
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+         $11, $12, $13, $14, $15)
+       ON CONFLICT (user_id)
+       DO UPDATE SET
+         role = EXCLUDED.role,
+         lifestyle_type = EXCLUDED.lifestyle_type,
+         wellness_goal = EXCLUDED.wellness_goal,
+         usual_sleep_time = EXCLUDED.usual_sleep_time,
+         usual_wake_time = EXCLUDED.usual_wake_time,
+         workload_level = EXCLUDED.workload_level,
+         updated_at = CURRENT_TIMESTAMP
+       RETURNING
+         id,
+         user_id,
+         role,
+         lifestyle_type,
+         wellness_goal,
+         to_char(usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
+         to_char(usual_wake_time, 'HH24:MI') AS usual_wake_time,
+         exercise_goal_days,
+         workload_level,
+         has_extra_responsibilities,
+         extra_responsibility_level,
+         emotional_exhaustion_score,
+         depersonalization_score,
+         personal_accomplishment_score,
+         initial_burnout_score,
+         initial_burnout_level,
+         created_at,
+         updated_at`,
+      [
+        userId,
+        role,
+        lifestyleType,
+        wellnessGoal,
+        usualSleepTime,
+        usualWakeTime,
+        existingProfile.exercise_goal_days ?? null,
+        workloadLevel,
+        existingProfile.has_extra_responsibilities ?? false,
+        existingProfile.extra_responsibility_level ?? null,
+        existingProfile.emotional_exhaustion_score ?? null,
+        existingProfile.depersonalization_score ?? null,
+        existingProfile.personal_accomplishment_score ?? null,
+        existingProfile.initial_burnout_score ?? null,
+        existingProfile.initial_burnout_level ?? null
+      ]
+    );
+
+    await client.query(
+      `UPDATE users
+       SET role = $2,
+           lifestyle_type = $3,
+           wellness_goal = COALESCE($4, wellness_goal),
+           onboarding_completed = TRUE,
+           onboarding_completed_at = COALESCE(onboarding_completed_at, NOW())
+       WHERE user_id = $1`,
+      [userId, role, lifestyleType, wellnessGoal]
+    );
+
+    await client.query(
+      `INSERT INTO user_preferences (
+         user_id,
+         default_wake_time,
+         default_sleep_time,
+         primary_goal
+       )
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id)
+       DO UPDATE SET
+         default_wake_time = EXCLUDED.default_wake_time,
+         default_sleep_time = EXCLUDED.default_sleep_time,
+         primary_goal = COALESCE(EXCLUDED.primary_goal, user_preferences.primary_goal),
+         updated_at = NOW()`,
+      [userId, usualWakeTime, usualSleepTime, wellnessGoal]
+    );
+
+    await client.query(
+      `INSERT INTO user_onboarding (
+         user_id,
+         role_type,
+         sleep_hours,
+         activity_level,
+         work_hours_per_day,
+         stress_level,
+         skipped
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+       ON CONFLICT (user_id)
+       DO UPDATE SET
+         role_type = EXCLUDED.role_type,
+         sleep_hours = EXCLUDED.sleep_hours,
+         activity_level = EXCLUDED.activity_level,
+         work_hours_per_day = EXCLUDED.work_hours_per_day,
+         stress_level = EXCLUDED.stress_level,
+         skipped = FALSE,
+         updated_at = NOW()`,
+      [
+        userId,
+        role,
+        sleepHoursBetween(usualSleepTime, usualWakeTime),
+        activityLevelForLegacy(lifestyleType),
+        workloadLevel >= 4 ? 10 : workloadLevel <= 2 ? 6 : 8,
+        workloadLevel
+      ]
+    );
+
+    await insertAnswerRecords(client, userId, [
+      {
+        question_key: 'role',
+        question_text: 'What best describes you?',
+        category: 'user_context',
+        answer_value: role,
+        numeric_value: null,
+        is_reverse_scored: false
+      },
+      {
+        question_key: 'lifestyle_type',
+        question_text: 'How would you describe your lifestyle?',
+        category: 'user_context',
+        answer_value: lifestyleType,
+        numeric_value: null,
+        is_reverse_scored: false
+      },
+      {
+        question_key: 'usual_sleep_time',
+        question_text: 'What time do you usually sleep?',
+        category: 'routine_defaults',
+        answer_value: usualSleepTime,
+        numeric_value: null,
+        is_reverse_scored: false
+      },
+      {
+        question_key: 'usual_wake_time',
+        question_text: 'What time do you usually wake up?',
+        category: 'routine_defaults',
+        answer_value: usualWakeTime,
+        numeric_value: null,
+        is_reverse_scored: false
+      },
+      {
+        question_key: 'workload_level',
+        question_text: 'How heavy is your usual workload?',
+        category: 'routine_defaults',
+        answer_value: String(workloadLevel),
+        numeric_value: workloadLevel,
+        is_reverse_scored: false
+      }
+    ]);
+
+    await client.query('COMMIT');
+
+    return {
+      profile: profileResult.rows[0],
+      baseline_for_ai: buildAiBaseline(profileResult.rows[0])
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }

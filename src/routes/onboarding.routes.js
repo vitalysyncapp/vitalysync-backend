@@ -7,6 +7,7 @@ import {
   getRequiredOnboardingStatus,
   getOnboardingSummary,
   submitOnboarding,
+  updateWellnessProfile,
   updateOnboarding,
   updatePreferences
 } from '../controllers/onboarding.controller.js';
@@ -16,6 +17,7 @@ const router = express.Router();
 router.get('/status/:userId', requireMatchingParamUser(), getRequiredOnboardingStatus);
 router.post('/submit', submitOnboarding);
 router.get('/:userId', requireMatchingParamUser(), getOnboardingSummary);
+router.put('/:userId/wellness-profile', requireMatchingParamUser(), updateWellnessProfile);
 router.post('/', createOnboarding);
 router.put('/:userId', requireMatchingParamUser(), updateOnboarding);
 router.post('/preferences', createPreferences);
