@@ -469,15 +469,23 @@ function averageForKeys(answerMap, keys) {
 }
 
 function classifyBaseline(averageScore) {
-  if (averageScore <= 2) {
-    return { level: 'Low', displayScore: 20 };
+  if (averageScore <= 1.5) {
+    return { level: 'Very Low', displayScore: 10 };
+  }
+
+  if (averageScore <= 2.5) {
+    return { level: 'Low', displayScore: 25 };
   }
 
   if (averageScore <= 3.5) {
-    return { level: 'Moderate', displayScore: 40 };
+    return { level: 'Moderate', displayScore: 35 };
   }
 
-  return { level: 'High', displayScore: 60 };
+  if (averageScore <= 4.5) {
+    return { level: 'High', displayScore: 45 };
+  }
+
+  return { level: 'Very High', displayScore: 60 };
 }
 
 export function calculateBurnoutBaselineScore(answers) {

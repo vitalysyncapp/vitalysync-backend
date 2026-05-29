@@ -8,30 +8,177 @@ import {
   getWeekStartDate,
 } from '../src/services/burnoutScoringEngine.js';
 
-function completeBaselineAnswers(value) {
-  return [
-    ...burnoutQuestionKeys.emotional_exhaustion,
-    ...burnoutQuestionKeys.depersonalization,
-    ...burnoutQuestionKeys.personal_accomplishment,
-  ].reduce((answers, key) => {
-    answers[key] = value;
+function repeated(value) {
+  return Array.from({ length: 5 }, () => value);
+}
+
+function answersForKeys(keys, values) {
+  return keys.reduce((answers, key, index) => {
+    answers[key] = values[index];
     return answers;
   }, {});
 }
 
-test('burnout baseline scoring classifies complete low-risk answers', () => {
-  const score = calculateBurnoutBaselineScore({
-    ...completeBaselineAnswers(1),
-    pa_01: 5,
-    pa_02: 5,
-    pa_03: 5,
-    pa_04: 5,
-    pa_05: 5,
-  });
+function baselineAnswers({
+  emotionalExhaustion,
+  depersonalization,
+  personalAccomplishment,
+}) {
+  return {
+    ...answersForKeys(
+      burnoutQuestionKeys.emotional_exhaustion,
+      emotionalExhaustion
+    ),
+    ...answersForKeys(
+      burnoutQuestionKeys.depersonalization,
+      depersonalization
+    ),
+    ...answersForKeys(
+      burnoutQuestionKeys.personal_accomplishment,
+      personalAccomplishment
+    ),
+  };
+}
 
-  assert.equal(score.initial_burnout_level, 'Low');
-  assert.equal(score.initial_burnout_score, 20);
-  assert.equal(score.emotional_exhaustion_score, 1);
+test('burnout baseline scoring classifies five-band results', () => {
+  const scenarios = [
+    {
+      level: 'Very Low',
+      displayScore: 10,
+      answers: baselineAnswers({
+        emotionalExhaustion: repeated(1),
+        depersonalization: repeated(1),
+        personalAccomplishment: repeated(5),
+      }),
+    },
+    {
+      level: 'Low',
+      displayScore: 25,
+      answers: baselineAnswers({
+        emotionalExhaustion: repeated(2),
+        depersonalization: repeated(2),
+        personalAccomplishment: repeated(4),
+      }),
+    },
+    {
+      level: 'Moderate',
+      displayScore: 35,
+      answers: baselineAnswers({
+        emotionalExhaustion: repeated(3),
+        depersonalization: repeated(3),
+        personalAccomplishment: repeated(3),
+      }),
+    },
+    {
+      level: 'High',
+      displayScore: 45,
+      answers: baselineAnswers({
+        emotionalExhaustion: repeated(4),
+        depersonalization: repeated(4),
+        personalAccomplishment: repeated(2),
+      }),
+    },
+    {
+      level: 'Very High',
+      displayScore: 60,
+      answers: baselineAnswers({
+        emotionalExhaustion: repeated(5),
+        depersonalization: repeated(5),
+        personalAccomplishment: repeated(1),
+      }),
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const score = calculateBurnoutBaselineScore(scenario.answers);
+
+    assert.equal(score.initial_burnout_level, scenario.level);
+    assert.equal(score.initial_burnout_score, scenario.displayScore);
+  }
+});
+
+test('burnout baseline scoring handles values near five-band cutoffs', () => {
+  const scenarios = [
+    {
+      level: 'Very Low',
+      displayScore: 10,
+      answers: baselineAnswers({
+        emotionalExhaustion: [1, 1, 1, 2, 2],
+        depersonalization: [1, 1, 1, 2, 2],
+        personalAccomplishment: [4, 4, 5, 5, 4],
+      }),
+    },
+    {
+      level: 'Low',
+      displayScore: 25,
+      answers: baselineAnswers({
+        emotionalExhaustion: [1, 2, 2, 1, 2],
+        depersonalization: [1, 2, 2, 1, 2],
+        personalAccomplishment: [5, 5, 5, 4, 4],
+      }),
+    },
+    {
+      level: 'Low',
+      displayScore: 25,
+      answers: baselineAnswers({
+        emotionalExhaustion: [2, 2, 2, 3, 3],
+        depersonalization: [2, 2, 2, 3, 3],
+        personalAccomplishment: [3, 3, 3, 4, 4],
+      }),
+    },
+    {
+      level: 'Moderate',
+      displayScore: 35,
+      answers: baselineAnswers({
+        emotionalExhaustion: [2, 3, 3, 2, 3],
+        depersonalization: [2, 3, 3, 2, 3],
+        personalAccomplishment: [4, 4, 4, 3, 3],
+      }),
+    },
+    {
+      level: 'Moderate',
+      displayScore: 35,
+      answers: baselineAnswers({
+        emotionalExhaustion: [3, 3, 3, 4, 4],
+        depersonalization: [3, 3, 3, 4, 4],
+        personalAccomplishment: [2, 2, 2, 3, 3],
+      }),
+    },
+    {
+      level: 'High',
+      displayScore: 45,
+      answers: baselineAnswers({
+        emotionalExhaustion: [4, 4, 4, 3, 3],
+        depersonalization: [4, 4, 4, 3, 3],
+        personalAccomplishment: [3, 3, 3, 2, 2],
+      }),
+    },
+    {
+      level: 'High',
+      displayScore: 45,
+      answers: baselineAnswers({
+        emotionalExhaustion: [4, 4, 4, 5, 5],
+        depersonalization: [4, 4, 4, 5, 5],
+        personalAccomplishment: [1, 1, 1, 2, 2],
+      }),
+    },
+    {
+      level: 'Very High',
+      displayScore: 60,
+      answers: baselineAnswers({
+        emotionalExhaustion: [5, 5, 5, 4, 4],
+        depersonalization: [5, 5, 5, 4, 4],
+        personalAccomplishment: [2, 2, 2, 1, 1],
+      }),
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const score = calculateBurnoutBaselineScore(scenario.answers);
+
+    assert.equal(score.initial_burnout_level, scenario.level);
+    assert.equal(score.initial_burnout_score, scenario.displayScore);
+  }
 });
 
 test('daily burnout scoring uses logs, pulse, activity, profile, and habits', () => {
