@@ -27,17 +27,23 @@ const allowedNudgeStyles = new Set([
   'Motivational',
   'Data-Driven'
 ]);
-const allowedGoals = new Set([
+const wellnessGoalOptions = [
   'Reduce stress',
   'Improve sleep',
   'Be more active',
   'Improve focus',
   'Build healthier habits',
-  'Manage burnout',
+  'Manage burnout'
+];
+const allowedGoals = new Set([
+  ...wellnessGoalOptions,
   'Build consistency',
   'Eat better',
   'Move more'
 ]);
+const allowedGoalByKey = new Map(
+  [...allowedGoals].map((goal) => [goal.toLowerCase(), goal])
+);
 
 function parsePositiveInt(value) {
   const parsed = Number(value);
@@ -79,6 +85,35 @@ function normalizeBusyDays(value) {
       .map((item) => parsePositiveInt(item))
       .filter((item) => item !== null && item >= 0 && item <= 6)
   )];
+}
+
+function normalizePrimaryGoal(value) {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return { value: null, wellnessGoals: [] };
+  }
+
+  const goals = [];
+  for (const part of normalized.split(',')) {
+    const goal = normalizeText(part);
+    if (!goal) {
+      continue;
+    }
+
+    const canonical = allowedGoalByKey.get(goal.toLowerCase());
+    if (!canonical) {
+      return { error: 'Invalid primary_goal value' };
+    }
+
+    if (!goals.includes(canonical)) {
+      goals.push(canonical);
+    }
+  }
+
+  return {
+    value: goals.join(', '),
+    wellnessGoals: goals.filter((goal) => wellnessGoalOptions.includes(goal))
+  };
 }
 
 async function userExists(userId) {
@@ -152,6 +187,7 @@ async function fetchOnboardingBundle(userId) {
        prefers_sleep_reminder,
        preferred_nudge_style,
        primary_goal,
+       wellness_goals,
        created_at,
        updated_at
      FROM user_preferences
@@ -479,7 +515,7 @@ export async function createPreferences(req, res) {
 
   const userId = Number(rawUserId);
   const normalizedNudgeStyle = normalizeText(preferred_nudge_style);
-  const normalizedGoal = normalizeText(primary_goal);
+  const normalizedGoal = normalizePrimaryGoal(primary_goal);
   const normalizedBusyDays = normalizeBusyDays(busy_days);
 
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -490,8 +526,8 @@ export async function createPreferences(req, res) {
     return res.status(400).json({ message: 'Invalid preferred_nudge_style value' });
   }
 
-  if (normalizedGoal && !allowedGoals.has(normalizedGoal)) {
-    return res.status(400).json({ message: 'Invalid primary_goal value' });
+  if (normalizedGoal.error) {
+    return res.status(400).json({ message: normalizedGoal.error });
   }
 
   const client = await pool.connect();
@@ -523,9 +559,10 @@ export async function createPreferences(req, res) {
          prefers_exercise_reminder,
          prefers_sleep_reminder,
          preferred_nudge_style,
-         primary_goal
+         primary_goal,
+         wellness_goals
        ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
        )
        RETURNING *`,
       [
@@ -541,7 +578,8 @@ export async function createPreferences(req, res) {
         Boolean(prefers_exercise_reminder),
         Boolean(prefers_sleep_reminder),
         normalizedNudgeStyle,
-        normalizedGoal
+        normalizedGoal.value,
+        normalizedGoal.wellnessGoals
       ]
     );
 
@@ -588,7 +626,7 @@ export async function updatePreferences(req, res) {
   } = req.body;
 
   const normalizedNudgeStyle = normalizeText(preferred_nudge_style);
-  const normalizedGoal = normalizeText(primary_goal);
+  const normalizedGoal = normalizePrimaryGoal(primary_goal);
   const normalizedBusyDays = normalizeBusyDays(busy_days);
 
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -599,8 +637,8 @@ export async function updatePreferences(req, res) {
     return res.status(400).json({ message: 'Invalid preferred_nudge_style value' });
   }
 
-  if (normalizedGoal && !allowedGoals.has(normalizedGoal)) {
-    return res.status(400).json({ message: 'Invalid primary_goal value' });
+  if (normalizedGoal.error) {
+    return res.status(400).json({ message: normalizedGoal.error });
   }
 
   const client = await pool.connect();
@@ -632,9 +670,10 @@ export async function updatePreferences(req, res) {
          prefers_exercise_reminder,
          prefers_sleep_reminder,
          preferred_nudge_style,
-         primary_goal
+         primary_goal,
+         wellness_goals
        ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
        )
        ON CONFLICT (user_id) DO UPDATE SET
          preferred_log_time = EXCLUDED.preferred_log_time,
@@ -649,6 +688,7 @@ export async function updatePreferences(req, res) {
          prefers_sleep_reminder = EXCLUDED.prefers_sleep_reminder,
          preferred_nudge_style = EXCLUDED.preferred_nudge_style,
          primary_goal = EXCLUDED.primary_goal,
+         wellness_goals = EXCLUDED.wellness_goals,
          updated_at = NOW()
        RETURNING *`,
       [
@@ -664,7 +704,8 @@ export async function updatePreferences(req, res) {
         Boolean(prefers_exercise_reminder),
         Boolean(prefers_sleep_reminder),
         normalizedNudgeStyle,
-        normalizedGoal
+        normalizedGoal.value,
+        normalizedGoal.wellnessGoals
       ]
     );
 

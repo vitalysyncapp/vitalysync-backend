@@ -17,14 +17,18 @@ const LIFESTYLE_OPTIONS = new Set([
   'Very Active'
 ]);
 
-const WELLNESS_GOAL_OPTIONS = new Set([
+const WELLNESS_GOAL_OPTIONS = [
   'Reduce stress',
   'Improve sleep',
   'Be more active',
   'Improve focus',
   'Build healthier habits',
   'Manage burnout'
-]);
+];
+
+const WELLNESS_GOAL_OPTION_BY_KEY = new Map(
+  WELLNESS_GOAL_OPTIONS.map((goal) => [goal.toLowerCase(), goal])
+);
 
 const EXERCISE_GOAL_OPTIONS = new Set([
   '0 days',
@@ -141,6 +145,37 @@ function normalizeText(value) {
   return normalized.length > 0 ? normalized : null;
 }
 
+function normalizeStringList(value) {
+  if (Array.isArray(value)) {
+    return value.map(normalizeText).filter(Boolean);
+  }
+
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return [];
+  }
+
+  return normalized.split(',').map(normalizeText).filter(Boolean);
+}
+
+function normalizeWellnessGoals(value) {
+  const selected = new Set();
+
+  for (const goal of normalizeStringList(value)) {
+    const canonical = WELLNESS_GOAL_OPTION_BY_KEY.get(goal.toLowerCase());
+    if (!canonical) {
+      throw new OnboardingServiceError('Invalid wellness_goal value');
+    }
+    selected.add(canonical);
+  }
+
+  return WELLNESS_GOAL_OPTIONS.filter((goal) => selected.has(goal));
+}
+
+function displayWellnessGoals(goals) {
+  return goals.join(', ');
+}
+
 function normalizeExerciseGoalDays(value) {
   const normalized = normalizeText(value);
 
@@ -216,7 +251,16 @@ function parseBoolean(value, fieldName) {
 function normalizeProfile(profile = {}) {
   const role = normalizeText(profile.role);
   const lifestyleType = normalizeText(profile.lifestyle_type);
-  const wellnessGoal = normalizeText(profile.wellness_goal);
+  const structuredWellnessValue =
+    profile.wellness_goals ?? profile.wellnessGoals;
+  const structuredWellnessGoals =
+    structuredWellnessValue == null
+      ? []
+      : normalizeWellnessGoals(structuredWellnessValue);
+  const wellnessGoals = structuredWellnessGoals.length > 0
+    ? structuredWellnessGoals
+    : normalizeWellnessGoals(profile.wellness_goal);
+  const wellnessGoal = displayWellnessGoals(wellnessGoals);
   const usualSleepTime = normalizeTime(profile.usual_sleep_time);
   const usualWakeTime = normalizeTime(profile.usual_wake_time);
   const exerciseGoalDays = normalizeExerciseGoalDays(profile.exercise_goal_days);
@@ -236,7 +280,7 @@ function normalizeProfile(profile = {}) {
     throw new OnboardingServiceError('Invalid lifestyle_type value');
   }
 
-  if (!WELLNESS_GOAL_OPTIONS.has(wellnessGoal)) {
+  if (wellnessGoals.length === 0) {
     throw new OnboardingServiceError('Invalid wellness_goal value');
   }
 
@@ -256,6 +300,7 @@ function normalizeProfile(profile = {}) {
     role,
     lifestyle_type: lifestyleType,
     wellness_goal: wellnessGoal,
+    wellness_goals: wellnessGoals,
     usual_sleep_time: usualSleepTime,
     usual_wake_time: usualWakeTime,
     exercise_goal_days: exerciseGoalDays,
@@ -308,7 +353,7 @@ function buildProfileAnswerRecords(profile) {
     },
     {
       question_key: 'wellness_goal',
-      question_text: 'What is your main wellness goal?',
+      question_text: 'Which wellness goals matter most to you?',
       category: 'user_context',
       answer_value: profile.wellness_goal,
       numeric_value: null,
@@ -442,6 +487,7 @@ function buildAiBaseline(profile) {
       role: profile.role,
       lifestyle_type: profile.lifestyle_type,
       wellness_goal: profile.wellness_goal,
+      wellness_goals: normalizeStringList(profile.wellness_goals),
       usual_sleep_time: profile.usual_sleep_time,
       usual_wake_time: profile.usual_wake_time,
       exercise_goal_days: profile.exercise_goal_days,
@@ -529,17 +575,19 @@ export async function submitRequiredOnboarding(payload) {
          depersonalization_score,
          personal_accomplishment_score,
          initial_burnout_score,
-         initial_burnout_level
+         initial_burnout_level,
+         wellness_goals
        )
        VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-         $11, $12, $13, $14, $15
+         $11, $12, $13, $14, $15, $16
        )
        ON CONFLICT (user_id)
        DO UPDATE SET
          role = EXCLUDED.role,
          lifestyle_type = EXCLUDED.lifestyle_type,
          wellness_goal = EXCLUDED.wellness_goal,
+         wellness_goals = EXCLUDED.wellness_goals,
          usual_sleep_time = EXCLUDED.usual_sleep_time,
          usual_wake_time = EXCLUDED.usual_wake_time,
          exercise_goal_days = EXCLUDED.exercise_goal_days,
@@ -568,7 +616,8 @@ export async function submitRequiredOnboarding(payload) {
         scores.depersonalization_score,
         scores.personal_accomplishment_score,
         scores.initial_burnout_score,
-        scores.initial_burnout_level
+        scores.initial_burnout_level,
+        profile.wellness_goals
       ]
     );
 
@@ -580,13 +629,15 @@ export async function submitRequiredOnboarding(payload) {
            onboarding_completed_at = COALESCE(onboarding_completed_at, NOW()),
            role = $2,
            lifestyle_type = $3,
-           wellness_goal = $4
+           wellness_goal = $4,
+           wellness_goals = $5
        WHERE user_id = $1`,
       [
         userId,
         profile.role,
         profile.lifestyle_type,
-        profile.wellness_goal
+        profile.wellness_goal,
+        profile.wellness_goals
       ]
     );
 
@@ -599,20 +650,49 @@ export async function submitRequiredOnboarding(payload) {
          prefers_hydration_reminder,
          prefers_exercise_reminder,
          prefers_sleep_reminder,
-         primary_goal
+         primary_goal,
+         wellness_goals
        )
-       VALUES ($1, $2, $3, TRUE, TRUE, TRUE, TRUE, $4)
+       VALUES ($1, $2, $3, TRUE, TRUE, TRUE, TRUE, $4, $5)
        ON CONFLICT (user_id)
        DO UPDATE SET
          default_wake_time = EXCLUDED.default_wake_time,
          default_sleep_time = EXCLUDED.default_sleep_time,
          primary_goal = EXCLUDED.primary_goal,
+         wellness_goals = EXCLUDED.wellness_goals,
          updated_at = NOW()`,
       [
         userId,
         profile.usual_wake_time,
         profile.usual_sleep_time,
-        profile.wellness_goal
+        profile.wellness_goal,
+        profile.wellness_goals
+      ]
+    );
+
+    await client.query(
+      `INSERT INTO user_goals (
+         user_id,
+         goal_type,
+         target_value,
+         target_text,
+         unit,
+         source,
+         metadata
+       )
+       VALUES ($1, 'wellness', NULL, $2, NULL, 'onboarding', $3::jsonb)
+       ON CONFLICT (user_id, goal_type)
+       DO UPDATE SET
+         target_value = EXCLUDED.target_value,
+         target_text = EXCLUDED.target_text,
+         unit = EXCLUDED.unit,
+         source = EXCLUDED.source,
+         metadata = EXCLUDED.metadata,
+         updated_at = NOW()`,
+      [
+        userId,
+        profile.wellness_goal,
+        JSON.stringify({ selected_goals: profile.wellness_goals })
       ]
     );
 
@@ -710,6 +790,7 @@ export async function getOnboardingSummaryBundle(userIdValue) {
        role,
        lifestyle_type,
        wellness_goal,
+       wellness_goals,
        to_char(usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
        to_char(usual_wake_time, 'HH24:MI') AS usual_wake_time,
        exercise_goal_days,
@@ -776,6 +857,10 @@ export async function getUserProfileSummary(userIdValue) {
        COALESCE(profile.role, users.role) AS role,
        COALESCE(profile.lifestyle_type, users.lifestyle_type) AS lifestyle_type,
        COALESCE(profile.wellness_goal, users.wellness_goal) AS wellness_goal,
+       CASE
+         WHEN cardinality(profile.wellness_goals) > 0 THEN profile.wellness_goals
+         ELSE users.wellness_goals
+       END AS wellness_goals,
        users.onboarding_completed,
        users.onboarding_completed_at,
        profile.id AS onboarding_profile_id,
@@ -813,6 +898,7 @@ export async function getUserProfileSummary(userIdValue) {
         role: row.role,
         lifestyle_type: row.lifestyle_type,
         wellness_goal: row.wellness_goal,
+        wellness_goals: normalizeStringList(row.wellness_goals),
         usual_sleep_time: row.usual_sleep_time,
         usual_wake_time: row.usual_wake_time,
         exercise_goal_days: row.exercise_goal_days,
@@ -838,6 +924,7 @@ export async function getUserProfileSummary(userIdValue) {
       role: row.role,
       lifestyle_type: row.lifestyle_type,
       wellness_goal: row.wellness_goal,
+      wellness_goals: normalizeStringList(row.wellness_goals),
       onboarding_completed:
         row.onboarding_completed == true && onboardingProfile != null,
       onboarding_completed_at: row.onboarding_completed_at
@@ -884,7 +971,10 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
     await client.query('BEGIN');
 
     const userResult = await client.query(
-      'SELECT user_id, wellness_goal FROM users WHERE user_id = $1 FOR UPDATE',
+      `SELECT user_id, wellness_goal, wellness_goals
+       FROM users
+       WHERE user_id = $1
+       FOR UPDATE`,
       [userId]
     );
 
@@ -895,6 +985,7 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
     const existingProfileResult = await client.query(
       `SELECT
          wellness_goal,
+         wellness_goals,
          exercise_goal_days,
          has_extra_responsibilities,
          extra_responsibility_level,
@@ -909,9 +1000,21 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
       [userId]
     );
     const existingProfile = existingProfileResult.rows[0] ?? {};
+    const existingWellnessGoals = normalizeStringList(
+      existingProfile.wellness_goals
+    );
+    const userWellnessGoals = normalizeStringList(
+      userResult.rows[0]?.wellness_goals
+    );
     const wellnessGoal =
       normalizeText(existingProfile.wellness_goal) ??
       normalizeText(userResult.rows[0]?.wellness_goal);
+    const wellnessGoals =
+      existingWellnessGoals.length > 0
+        ? existingWellnessGoals
+        : userWellnessGoals.length > 0
+        ? userWellnessGoals
+        : normalizeStringList(wellnessGoal);
 
     const profileResult = await client.query(
       `INSERT INTO user_onboarding_profiles (
@@ -929,15 +1032,17 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
          depersonalization_score,
          personal_accomplishment_score,
          initial_burnout_score,
-         initial_burnout_level
+         initial_burnout_level,
+         wellness_goals
        )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-         $11, $12, $13, $14, $15)
+         $11, $12, $13, $14, $15, $16)
        ON CONFLICT (user_id)
        DO UPDATE SET
          role = EXCLUDED.role,
          lifestyle_type = EXCLUDED.lifestyle_type,
          wellness_goal = EXCLUDED.wellness_goal,
+         wellness_goals = EXCLUDED.wellness_goals,
          usual_sleep_time = EXCLUDED.usual_sleep_time,
          usual_wake_time = EXCLUDED.usual_wake_time,
          workload_level = EXCLUDED.workload_level,
@@ -948,6 +1053,7 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
          role,
          lifestyle_type,
          wellness_goal,
+         wellness_goals,
          to_char(usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
          to_char(usual_wake_time, 'HH24:MI') AS usual_wake_time,
          exercise_goal_days,
@@ -976,7 +1082,8 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
         existingProfile.depersonalization_score ?? null,
         existingProfile.personal_accomplishment_score ?? null,
         existingProfile.initial_burnout_score ?? null,
-        existingProfile.initial_burnout_level ?? null
+        existingProfile.initial_burnout_level ?? null,
+        wellnessGoals
       ]
     );
 
@@ -985,10 +1092,11 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
        SET role = $2,
            lifestyle_type = $3,
            wellness_goal = COALESCE($4, wellness_goal),
+           wellness_goals = $5,
            onboarding_completed = TRUE,
            onboarding_completed_at = COALESCE(onboarding_completed_at, NOW())
        WHERE user_id = $1`,
-      [userId, role, lifestyleType, wellnessGoal]
+      [userId, role, lifestyleType, wellnessGoal, wellnessGoals]
     );
 
     await client.query(
@@ -996,16 +1104,18 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
          user_id,
          default_wake_time,
          default_sleep_time,
-         primary_goal
+         primary_goal,
+         wellness_goals
        )
-       VALUES ($1, $2, $3, $4)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (user_id)
        DO UPDATE SET
          default_wake_time = EXCLUDED.default_wake_time,
          default_sleep_time = EXCLUDED.default_sleep_time,
          primary_goal = COALESCE(EXCLUDED.primary_goal, user_preferences.primary_goal),
+         wellness_goals = EXCLUDED.wellness_goals,
          updated_at = NOW()`,
-      [userId, usualWakeTime, usualSleepTime, wellnessGoal]
+      [userId, usualWakeTime, usualSleepTime, wellnessGoal, wellnessGoals]
     );
 
     await client.query(

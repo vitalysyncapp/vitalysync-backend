@@ -11,6 +11,19 @@ export const GOAL_TYPES = [
 
 const GOAL_TYPE_SET = new Set(GOAL_TYPES);
 
+const WELLNESS_GOAL_OPTIONS = [
+  'Reduce stress',
+  'Improve sleep',
+  'Be more active',
+  'Improve focus',
+  'Build healthier habits',
+  'Manage burnout',
+];
+
+const WELLNESS_GOAL_OPTION_BY_KEY = new Map(
+  WELLNESS_GOAL_OPTIONS.map((goal) => [goal.toLowerCase(), goal])
+);
+
 const GOAL_DEFAULTS = {
   wellness: {
     target_value: null,
@@ -73,6 +86,40 @@ function parseUserId(value) {
 function normalizeText(value) {
   const normalized = String(value ?? '').trim();
   return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeStringList(value) {
+  if (Array.isArray(value)) {
+    return value.map(normalizeText).filter(Boolean);
+  }
+
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return [];
+  }
+
+  return normalized.split(',').map(normalizeText).filter(Boolean);
+}
+
+function normalizeWellnessGoals(value, { rejectInvalid = false } = {}) {
+  const selected = new Set();
+
+  for (const goal of normalizeStringList(value)) {
+    const canonical = WELLNESS_GOAL_OPTION_BY_KEY.get(goal.toLowerCase());
+    if (!canonical) {
+      if (rejectInvalid) {
+        throw new GoalsServiceError('Invalid wellness goal selection');
+      }
+      continue;
+    }
+    selected.add(canonical);
+  }
+
+  return WELLNESS_GOAL_OPTIONS.filter((goal) => selected.has(goal));
+}
+
+function displayWellnessGoals(goals) {
+  return goals.join(', ');
 }
 
 function parseNumber(value, fieldName) {
@@ -167,15 +214,36 @@ function normalizeGoal(goalType, rawGoal) {
   }
 
   const source = normalizeText(rawGoal?.source) ?? 'user';
-  const metadata = normalizeMetadata(rawGoal?.metadata);
+  const metadata = { ...normalizeMetadata(rawGoal?.metadata) };
 
   if (goalType === 'wellness') {
-    const targetText = normalizeText(
+    const explicitText = normalizeText(
       rawGoal?.target_text ?? rawGoal?.targetText ?? rawGoal?.value
     );
+    const selectedGoals = normalizeWellnessGoals(
+      rawGoal?.wellness_goals ??
+        rawGoal?.wellnessGoals ??
+        rawGoal?.selected_goals ??
+        metadata.selected_goals ??
+        explicitText,
+      {
+        rejectInvalid:
+          rawGoal?.wellness_goals != null ||
+          rawGoal?.wellnessGoals != null ||
+          rawGoal?.selected_goals != null ||
+          metadata.selected_goals != null,
+      }
+    );
+    const targetText = selectedGoals.length > 0
+      ? displayWellnessGoals(selectedGoals)
+      : explicitText;
 
     if (!targetText) {
       throw new GoalsServiceError('wellness goal text is required');
+    }
+
+    if (selectedGoals.length > 0) {
+      metadata.selected_goals = selectedGoals;
     }
 
     return {
@@ -300,17 +368,28 @@ function buildFallbackGoals({ profile, legacyOnboarding, preferences, latestActi
     latestActivity?.goal_steps == null
       ? GOAL_DEFAULTS.daily_steps.target_value
       : Number(latestActivity.goal_steps);
+  const profileWellnessGoals = normalizeWellnessGoals(profile?.wellness_goals);
+  const preferenceWellnessGoals = normalizeWellnessGoals(
+    preferences?.wellness_goals
+  );
+  const selectedWellnessGoals = profileWellnessGoals.length > 0
+    ? profileWellnessGoals
+    : preferenceWellnessGoals.length > 0
+    ? preferenceWellnessGoals
+    : normalizeWellnessGoals(profile?.wellness_goal ?? preferences?.primary_goal);
+  const wellnessGoalText = selectedWellnessGoals.length > 0
+    ? displayWellnessGoals(selectedWellnessGoals)
+    : normalizeText(profile?.wellness_goal) ??
+      normalizeText(preferences?.primary_goal) ??
+      GOAL_DEFAULTS.wellness.target_text;
 
   return {
     wellness: {
       goal_type: 'wellness',
       ...GOAL_DEFAULTS.wellness,
-      target_text:
-        normalizeText(profile?.wellness_goal) ??
-        normalizeText(preferences?.primary_goal) ??
-        GOAL_DEFAULTS.wellness.target_text,
+      target_text: wellnessGoalText,
       source: 'derived',
-      metadata: {},
+      metadata: { selected_goals: selectedWellnessGoals },
     },
     sleep_hours: {
       goal_type: 'sleep_hours',
@@ -362,6 +441,7 @@ async function readGoalContext(client, userId) {
   const profileResult = await client.query(
     `SELECT
        wellness_goal,
+       wellness_goals,
        lifestyle_type,
        exercise_goal_days,
        to_char(usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
@@ -377,7 +457,7 @@ async function readGoalContext(client, userId) {
     [userId]
   );
   const preferencesResult = await client.query(
-    `SELECT primary_goal
+    `SELECT primary_goal, wellness_goals
      FROM user_preferences
      WHERE user_id = $1`,
     [userId]
@@ -447,6 +527,83 @@ export async function getUserGoals(userIdValue) {
   }
 }
 
+function wellnessGoalsForGoal(goal) {
+  const metadataGoals = normalizeWellnessGoals(goal.metadata?.selected_goals);
+  if (metadataGoals.length > 0) {
+    return metadataGoals;
+  }
+
+  return normalizeWellnessGoals(goal.target_text);
+}
+
+async function syncWellnessGoalContext(client, userId, goal) {
+  const selectedGoals = wellnessGoalsForGoal(goal);
+  const wellnessGoal = selectedGoals.length > 0
+    ? displayWellnessGoals(selectedGoals)
+    : goal.target_text;
+
+  await client.query(
+    `UPDATE users
+     SET wellness_goal = $2,
+         wellness_goals = $3
+     WHERE user_id = $1`,
+    [userId, wellnessGoal, selectedGoals]
+  );
+
+  await client.query(
+    `UPDATE user_onboarding_profiles
+     SET wellness_goal = $2,
+         wellness_goals = $3,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE user_id = $1`,
+    [userId, wellnessGoal, selectedGoals]
+  );
+
+  await client.query(
+    `INSERT INTO user_preferences (
+       user_id,
+       primary_goal,
+       wellness_goals
+     )
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id)
+     DO UPDATE SET
+       primary_goal = EXCLUDED.primary_goal,
+       wellness_goals = EXCLUDED.wellness_goals,
+       updated_at = NOW()`,
+    [userId, wellnessGoal, selectedGoals]
+  );
+
+  await client.query(
+    `INSERT INTO user_onboarding_answers (
+       user_id,
+       question_key,
+       question_text,
+       category,
+       answer_value,
+       numeric_value,
+       is_reverse_scored
+     )
+     VALUES (
+       $1,
+       'wellness_goal',
+       'Which wellness goals matter most to you?',
+       'user_context',
+       $2,
+       NULL,
+       FALSE
+     )
+     ON CONFLICT (user_id, question_key)
+     DO UPDATE SET
+       question_text = EXCLUDED.question_text,
+       category = EXCLUDED.category,
+       answer_value = EXCLUDED.answer_value,
+       numeric_value = EXCLUDED.numeric_value,
+       is_reverse_scored = EXCLUDED.is_reverse_scored`,
+    [userId, wellnessGoal]
+  );
+}
+
 export async function upsertUserGoals(userIdValue, payload) {
   const userId = parseUserId(userIdValue);
   const goals = normalizeGoalsPayload(payload);
@@ -489,6 +646,10 @@ export async function upsertUserGoals(userIdValue, payload) {
           JSON.stringify(goal.metadata),
         ]
       );
+
+      if (goal.goal_type === 'wellness') {
+        await syncWellnessGoalContext(client, userId, goal);
+      }
     }
 
     await client.query('COMMIT');

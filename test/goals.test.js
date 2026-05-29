@@ -71,3 +71,22 @@ test('goals normalize all supported goal payload values', () => {
   assert.equal(goals.find((goal) => goal.goal_type === 'sleep_hours').unit, 'hours');
   assert.equal(goals.find((goal) => goal.goal_type === 'daily_steps').target_value, 7000);
 });
+
+test('goals normalize structured wellness goal selections', () => {
+  const goals = normalizeGoalsPayload({
+    goals: {
+      wellness: {
+        metadata: {
+          selected_goals: ['Manage burnout', 'Improve sleep'],
+        },
+      },
+    },
+  });
+  const wellness = goals[0];
+
+  assert.equal(wellness.target_text, 'Improve sleep, Manage burnout');
+  assert.deepEqual(wellness.metadata.selected_goals, [
+    'Improve sleep',
+    'Manage burnout',
+  ]);
+});

@@ -36,3 +36,26 @@ test('onboarding rejects incomplete profile values before database work', async 
       error.message === 'Invalid role value'
   );
 });
+
+test('onboarding rejects unsupported wellness goal selections before database work', async () => {
+  await assert.rejects(
+    () =>
+      submitRequiredOnboarding({
+        user_id: 1,
+        profile: {
+          role: 'Student',
+          lifestyle_type: 'Sedentary',
+          wellness_goals: ['Improve sleep', 'Unsupported goal'],
+          usual_sleep_time: '22:00',
+          usual_wake_time: '06:00',
+          exercise_goal_days: '3-4 days',
+          workload_level: 3,
+          has_extra_responsibilities: false,
+        },
+        burnout_answers: [],
+      }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'Invalid wellness_goal value'
+  );
+});
