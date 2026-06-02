@@ -191,6 +191,9 @@ export async function getTodayLog(req, res) {
          workload_hours_band,
          perceived_stress_level,
          break_quality_level,
+         daily_detachment_level,
+         daily_focus_level,
+         daily_accomplishment_level,
          exercise_names,
          symptom_names,
          habit_names,
@@ -266,6 +269,9 @@ export async function getLatestLog(req, res) {
          workload_hours_band,
          perceived_stress_level,
          break_quality_level,
+         daily_detachment_level,
+         daily_focus_level,
+         daily_accomplishment_level,
          exercise_names,
          symptom_names,
          habit_names,
@@ -340,6 +346,9 @@ export async function getLogHistory(req, res) {
          workload_hours_band,
          perceived_stress_level,
          break_quality_level,
+         daily_detachment_level,
+         daily_focus_level,
+         daily_accomplishment_level,
          exercise_names,
          symptom_names,
          habit_names,
@@ -377,6 +386,9 @@ export async function saveDailyLog(req, res) {
     workload_hours_band: workloadHoursBand,
     perceived_stress_level: perceivedStressLevel,
     break_quality_level: breakQualityLevel,
+    daily_detachment_level: dailyDetachmentLevel,
+    daily_focus_level: dailyFocusLevel,
+    daily_accomplishment_level: dailyAccomplishmentLevel,
     exercise_names: exerciseNames,
     symptom_names: symptomNames,
     habit_names: habitNames,
@@ -396,6 +408,11 @@ export async function saveDailyLog(req, res) {
   const normalizedEnergyLevel = parseLikert(energyLevel);
   const normalizedPerceivedStressLevel = parseLikert(perceivedStressLevel);
   const normalizedBreakQualityLevel = parseLikert(breakQualityLevel);
+  const normalizedDailyDetachmentLevel = parseLikert(dailyDetachmentLevel);
+  const normalizedDailyFocusLevel = parseLikert(dailyFocusLevel);
+  const normalizedDailyAccomplishmentLevel = parseLikert(
+    dailyAccomplishmentLevel
+  );
   const normalizedExerciseGoalName = normalizeNullableText(exerciseGoalName);
   const normalizedExerciseGoalCompleted = normalizeOptionalBoolean(exerciseGoalCompleted);
   const normalizedExerciseGoalSource = normalizeNullableText(exerciseGoalSource);
@@ -439,6 +456,18 @@ export async function saveDailyLog(req, res) {
 
   if (breakQualityLevel != null && normalizedBreakQualityLevel == null) {
     return res.status(400).json({ message: 'Valid break_quality_level is required' });
+  }
+
+  if (dailyDetachmentLevel != null && normalizedDailyDetachmentLevel == null) {
+    return res.status(400).json({ message: 'Valid daily_detachment_level is required' });
+  }
+
+  if (dailyFocusLevel != null && normalizedDailyFocusLevel == null) {
+    return res.status(400).json({ message: 'Valid daily_focus_level is required' });
+  }
+
+  if (dailyAccomplishmentLevel != null && normalizedDailyAccomplishmentLevel == null) {
+    return res.status(400).json({ message: 'Valid daily_accomplishment_level is required' });
   }
 
   if (normalizedExercises.length === 0) {
@@ -491,13 +520,16 @@ export async function saveDailyLog(req, res) {
              workload_hours_band = COALESCE($8, workload_hours_band),
              perceived_stress_level = COALESCE($9, perceived_stress_level),
              break_quality_level = COALESCE($10, break_quality_level),
-             exercise_names = $11,
-             symptom_names = $12,
-             exercise_goal_name = COALESCE($13, exercise_goal_name),
-             exercise_goal_completed = COALESCE($14, exercise_goal_completed),
-             exercise_goal_source = COALESCE($15, exercise_goal_source),
-             exercise_goal_status = COALESCE($16, exercise_goal_status),
-             habit_names = CASE WHEN $17 THEN $18::TEXT[] ELSE habit_names END,
+             daily_detachment_level = COALESCE($11, daily_detachment_level),
+             daily_focus_level = COALESCE($12, daily_focus_level),
+             daily_accomplishment_level = COALESCE($13, daily_accomplishment_level),
+             exercise_names = $14,
+             symptom_names = $15,
+             exercise_goal_name = COALESCE($16, exercise_goal_name),
+             exercise_goal_completed = COALESCE($17, exercise_goal_completed),
+             exercise_goal_source = COALESCE($18, exercise_goal_source),
+             exercise_goal_status = COALESCE($19, exercise_goal_status),
+             habit_names = CASE WHEN $20 THEN $21::TEXT[] ELSE habit_names END,
              updated_at = NOW()
          WHERE user_id = $1 AND log_date = $2`,
         [
@@ -511,6 +543,9 @@ export async function saveDailyLog(req, res) {
           normalizedWorkloadHoursBand,
           normalizedPerceivedStressLevel,
           normalizedBreakQualityLevel,
+          normalizedDailyDetachmentLevel,
+          normalizedDailyFocusLevel,
+          normalizedDailyAccomplishmentLevel,
           normalizedExercises,
           normalizedSymptoms,
           normalizedExerciseGoalName,
@@ -534,6 +569,9 @@ export async function saveDailyLog(req, res) {
            workload_hours_band,
            perceived_stress_level,
            break_quality_level,
+           daily_detachment_level,
+           daily_focus_level,
+           daily_accomplishment_level,
            exercise_names,
            symptom_names,
            exercise_goal_name,
@@ -544,7 +582,8 @@ export async function saveDailyLog(req, res) {
          )
          VALUES (
            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-           $11, $12, $13, COALESCE($14, FALSE), $15, $16, $17::TEXT[]
+           $11, $12, $13, $14, $15, $16, COALESCE($17, FALSE),
+           $18, $19, $20::TEXT[]
          )`,
         [
           userId,
@@ -557,6 +596,9 @@ export async function saveDailyLog(req, res) {
           normalizedWorkloadHoursBand,
           normalizedPerceivedStressLevel,
           normalizedBreakQualityLevel,
+          normalizedDailyDetachmentLevel,
+          normalizedDailyFocusLevel,
+          normalizedDailyAccomplishmentLevel,
           normalizedExercises,
           normalizedSymptoms,
           normalizedExerciseGoalName,
@@ -607,6 +649,9 @@ export async function saveDailyLog(req, res) {
          workload_hours_band,
          perceived_stress_level,
          break_quality_level,
+         daily_detachment_level,
+         daily_focus_level,
+         daily_accomplishment_level,
          exercise_names,
          symptom_names,
          exercise_goal_name,

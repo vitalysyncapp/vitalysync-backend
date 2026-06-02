@@ -47,6 +47,37 @@ test('daily log save validates energy as a 1 to 5 Likert value', async () => {
   assert.equal(res.body.message, 'Valid energy_level is required');
 });
 
+test('daily log save validates daily dimension Likert values before database work', async () => {
+  const res = createMockResponse();
+
+  await saveDailyLog(
+    {
+      body: {
+        user_id: 1,
+        log_date: '2026-05-18',
+        sleep_hours: 7,
+        sleep_quality: 2,
+        mood_index: 2,
+        energy_level: 3,
+        hydration_liters: 2,
+        workload_hours_band: '3-4 hours',
+        perceived_stress_level: 3,
+        break_quality_level: 3,
+        daily_detachment_level: 6,
+        daily_focus_level: 3,
+        daily_accomplishment_level: 3,
+        exercise_names: ['Walking'],
+        symptom_names: ['None'],
+        habit_names: ['Quiet break'],
+      },
+    },
+    res
+  );
+
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.message, 'Valid daily_detachment_level is required');
+});
+
 test('weekly pulse validates Likert values before database work', async () => {
   const res = createMockResponse();
 
