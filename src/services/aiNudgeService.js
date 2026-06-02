@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import OpenAI from 'openai';
 
 const DEFAULT_OPENAI_NUDGE_MODEL = 'gpt-5.4-mini';
-const PROMPT_VERSION = 'ai_nudge_v2';
+const PROMPT_VERSION = 'ai_nudge_v3_personalized';
 const MAX_TITLE_LENGTH = 48;
 const MAX_MESSAGE_LENGTH = 180;
 const MAX_WHY_LENGTH = 120;
@@ -73,6 +73,28 @@ function truncate(value, maxLength) {
   }
 
   return `${normalized.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+}
+
+export function ensureNameInMessage(message, displayName, maxLength = MAX_MESSAGE_LENGTH) {
+  const normalized = safeString(message);
+  const name = safeString(displayName);
+  if (!normalized || !name) {
+    return truncate(normalized, maxLength);
+  }
+
+  if (normalized.toLowerCase().includes(name.toLowerCase())) {
+    return truncate(normalized, maxLength);
+  }
+
+  const shouldLowerFirst = !normalized.startsWith('VitalySync');
+  const personalizedMessage = shouldLowerFirst
+    ? `${normalized[0].toLowerCase()}${normalized.slice(1)}`
+    : normalized;
+
+  return truncate(
+    `${name}, ${personalizedMessage}`,
+    maxLength
+  );
 }
 
 function normalizeActionSteps(value) {
@@ -145,9 +167,19 @@ function pickWindow(summary, days) {
   return summary?.windows?.[`${days}_day`] ?? {};
 }
 
-function buildAiContext(recommendation, summary, preferences) {
+export function buildAiContext(
+  recommendation,
+  summary,
+  preferences,
+  personalization = null
+) {
   const window7 = pickWindow(summary, 7);
   const window14 = pickWindow(summary, 14);
+  const metadata = recommendation?.metadata ?? {};
+  const userDisplayName =
+    personalization?.displayName ?? metadata.user_display_name ?? null;
+  const personalizationProfile =
+    personalization?.profile ?? metadata.personalization_profile ?? {};
 
   return {
     deterministic_recommendation: {
@@ -190,10 +222,21 @@ function buildAiContext(recommendation, summary, preferences) {
       nudge_cooldown_hours: preferences.cooldownHours,
       max_daily_nudges: preferences.maxDailyNudges
     },
+    personal_context: {
+      user_display_name: userDisplayName,
+      profile: personalizationProfile,
+      variables_available: metadata.profile_variables_used ?? [],
+      visible_personalization: {
+        use_username_once_when_available: Boolean(userDisplayName),
+        use_at_most_one_profile_detail: true,
+        keep_profile_details_subtle: true
+      }
+    },
     guardrails: {
       do_not_change_priority_or_risk: true,
       do_not_diagnose: true,
       keep_behavioral_and_small: true,
+      do_not_reference_email_age_or_gender: true,
       output_language: 'English'
     }
   };
@@ -248,10 +291,15 @@ export async function enhanceNudgeRecommendation(
   client,
   userId,
   recommendation,
-  { summary, preferences }
+  { summary, preferences, personalization = null }
 ) {
   const model = process.env.OPENAI_NUDGE_MODEL || DEFAULT_OPENAI_NUDGE_MODEL;
-  const context = buildAiContext(recommendation, summary, preferences);
+  const context = buildAiContext(
+    recommendation,
+    summary,
+    preferences,
+    personalization
+  );
 
   try {
     const openai = getOpenAIClient();
@@ -264,7 +312,7 @@ export async function enhanceNudgeRecommendation(
             {
               type: 'input_text',
               text:
-                'You write short, human wellness nudges for VitalySync. Preserve deterministic risk, priority, trigger, and focus. Do not diagnose burnout. Do not invent data. Sound warm, direct, and natural, not clinical. Use plain everyday language that is easy to understand on a quick read. Keep it brief: one complete message sentence, one short reason sentence, and at most two small action steps. Keep the message objective and based only on the supplied trend or pattern. Avoid hype, vague encouragement, or generic wellness advice. Return JSON only.'
+                'You write short, human wellness nudges for VitalySync. Preserve deterministic risk, priority, trigger, and focus. Do not diagnose burnout. Do not invent data. Use the username once in the message when available. Use at most one relevant profile detail, and only if it makes the nudge clearer. Do not mention email, age, or gender. Sound warm, direct, and natural, not clinical. Use plain everyday language that is easy to understand on a quick read. Keep it brief: one complete message sentence, one short reason sentence, and at most two small action steps. Keep the message objective and based only on the supplied trend or pattern. Avoid hype, vague encouragement, or generic wellness advice. Return JSON only.'
             }
           ]
         },
@@ -274,7 +322,7 @@ export async function enhanceNudgeRecommendation(
             {
               type: 'input_text',
               text:
-                'Rewrite this nudge so it feels personal, concise, and easy to act on. Use complete thoughts, not fragments. Make the wording more human and understandable while staying objective. No long explanations. No generic wellness lecture. Stay inside the supplied context.\n\nContext JSON:\n' +
+                'Rewrite this nudge so it feels personal, concise, and easy to act on. Use complete thoughts, not fragments. Make the wording more human and understandable while staying objective. If a username is supplied, include it naturally once in the message. No long explanations. No generic wellness lecture. Stay inside the supplied context.\n\nContext JSON:\n' +
                 JSON.stringify(context)
             }
           ]
@@ -308,13 +356,18 @@ export async function enhanceNudgeRecommendation(
       return recommendation;
     }
 
+    const personalizedMessage = ensureNameInMessage(
+      normalized.message,
+      context.personal_context.user_display_name
+    );
     const enhancedRecommendation = {
       ...recommendation,
       title: normalized.title,
-      message: normalized.message,
+      message: personalizedMessage,
       action_label: normalized.suggested_action,
       metadata: {
         ...recommendation.metadata,
+        title: normalized.title,
         ai_enhanced: true,
         ai_model: model,
         ai_prompt_version: PROMPT_VERSION,
@@ -365,7 +418,7 @@ export async function enhanceNudgeRecommendations(
   client,
   userId,
   recommendations,
-  { summary, preferences, enhanceThrottled = false }
+  { summary, preferences, personalization = null, enhanceThrottled = false }
 ) {
   const enhanced = [];
 
@@ -378,7 +431,8 @@ export async function enhanceNudgeRecommendations(
     enhanced.push(
       await enhanceNudgeRecommendation(client, userId, recommendation, {
         summary,
-        preferences
+        preferences,
+        personalization
       })
     );
   }

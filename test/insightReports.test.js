@@ -56,6 +56,9 @@ function createInsightReportClient({ dailyData = false, weeklyData = false } = {
                   hydration_liters: 2.1,
                   perceived_stress_level: 3,
                   break_quality_level: 4,
+                  daily_detachment_level: 4,
+                  daily_focus_level: 2,
+                  daily_accomplishment_level: 3,
                   exercise_names: ['Walking'],
                   symptom_names: ['None'],
                   habit_names: ['Quiet break'],
@@ -84,6 +87,9 @@ function createInsightReportClient({ dailyData = false, weeklyData = false } = {
                   workload_hours_band: '8-9 hours',
                   perceived_stress_level: 4,
                   break_quality_level: 2,
+                  daily_detachment_level: 4,
+                  daily_focus_level: 2,
+                  daily_accomplishment_level: 3,
                   exercise_names: ['Walking'],
                   symptom_names: ['Headache'],
                   habit_names: ['Quiet break'],
@@ -268,6 +274,11 @@ test('daily insight report refresh upserts a daily report', async () => {
   assert.equal(reports.length, 1);
   assert.equal(reports[0].report_type, 'daily');
   assert.equal(reports[0].period_start, '2026-05-21');
+  assert.equal(reports[0].metrics.daily_detachment_level, 4);
+  assert.equal(reports[0].metrics.daily_focus_level, 2);
+  assert.equal(reports[0].metrics.daily_accomplishment_level, 3);
+  assert.match(reports[0].summary, /detachment 4\/5/);
+  assert.match(reports[0].summary, /focus 2\/5/);
   assert.equal(client.inserts.length, 1);
   assert.match(client.inserts[0].sql, /ON CONFLICT/);
 });
@@ -294,6 +305,13 @@ test('weekly insight report refresh upserts a weekly report on Sunday', async ()
   assert.equal(reports[0].report_type, 'weekly');
   assert.equal(reports[0].period_start, '2026-05-18');
   assert.equal(reports[0].period_end, '2026-05-24');
+  assert.equal(reports[0].metrics.average_daily_detachment_level, 4);
+  assert.equal(reports[0].metrics.average_daily_focus_level, 2);
+  assert.equal(reports[0].metrics.average_daily_accomplishment_level, 3);
+  assert.equal(reports[0].metrics.weekly_productivity_focus_level, 3);
+  assert.equal(reports[0].metrics.weekly_detachment_level, 2);
+  assert.match(reports[0].summary, /daily detachment 4\/5/);
+  assert.match(reports[0].summary, /focus 2\/5/);
 });
 
 test('insight report listing requests newest reports first', async () => {

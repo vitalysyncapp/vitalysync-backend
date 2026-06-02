@@ -22,6 +22,99 @@ const STYLE_THROTTLE_DEFAULTS = {
   'Data-Driven': { cooldownHours: 6, maxDailyNudges: 3 }
 };
 
+function safeText(value) {
+  const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeStringList(value) {
+  if (Array.isArray(value)) {
+    return value.map(safeText).filter(Boolean);
+  }
+
+  const normalized = safeText(value);
+  if (!normalized) {
+    return [];
+  }
+
+  if (normalized.startsWith('{') && normalized.endsWith('}')) {
+    return normalized
+      .slice(1, -1)
+      .split(',')
+      .map((item) => safeText(item.replace(/^"|"$/g, '')))
+      .filter(Boolean);
+  }
+
+  return normalized.split(',').map(safeText).filter(Boolean);
+}
+
+function compactObject(value) {
+  return Object.entries(value).reduce((result, [key, item]) => {
+    if (item == null) {
+      return result;
+    }
+    if (Array.isArray(item) && item.length === 0) {
+      return result;
+    }
+    result[key] = item;
+    return result;
+  }, {});
+}
+
+function displayNameFromUsername(value) {
+  const normalized = safeText(value);
+  return normalized ? normalized.slice(0, 36) : null;
+}
+
+function prependDisplayName(message, displayName) {
+  const normalizedMessage = safeText(message) ?? '';
+  const name = displayNameFromUsername(displayName);
+  if (!name || normalizedMessage.length === 0) {
+    return normalizedMessage;
+  }
+
+  if (normalizedMessage.toLowerCase().startsWith(`${name.toLowerCase()},`)) {
+    return normalizedMessage;
+  }
+
+  const shouldLowerFirst = !normalizedMessage.startsWith('VitalySync');
+  const personalizedMessage = shouldLowerFirst
+    ? `${normalizedMessage[0].toLowerCase()}${normalizedMessage.slice(1)}`
+    : normalizedMessage;
+
+  return `${name}, ${personalizedMessage}`;
+}
+
+function personalizationVariables(personalization) {
+  const profile = personalization?.profile ?? {};
+  const variables = [];
+  if (personalization?.displayName) {
+    variables.push('username');
+  }
+  if (profile.role) {
+    variables.push('role');
+  }
+  if (profile.lifestyle_type) {
+    variables.push('lifestyle_type');
+  }
+  if (profile.wellness_goals?.length > 0) {
+    variables.push('wellness_goals');
+  }
+  if (profile.usual_sleep_time || profile.usual_wake_time) {
+    variables.push('routine_times');
+  }
+  if (profile.exercise_goal_days) {
+    variables.push('exercise_goal_days');
+  }
+  if (profile.workload_level != null) {
+    variables.push('workload_level');
+  }
+  if (profile.has_extra_responsibilities === true) {
+    variables.push('responsibility_context');
+  }
+  return variables;
+}
+
 function boundedLimit(value, fallback = 3) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -85,7 +178,7 @@ function recommendationFromPattern(pattern, summary) {
         priority,
         title: 'Protect your recovery window',
         message:
-          'Your recent pattern has stayed elevated. Pick one workload pressure to reduce or defer today, then protect a real recovery block.',
+          'Your recent pattern has stayed high. Make one task smaller today and protect a real break.',
         actionLabel: 'Plan recovery',
         triggerReason: pattern.title,
         recommendedFocus: 'load_reduction',
@@ -98,7 +191,7 @@ function recommendationFromPattern(pattern, summary) {
         priority,
         title: 'Slow the rising trend',
         message:
-          'Your short-term burnout trend is climbing. A short pause, lighter task, or earlier wind-down can help interrupt the pattern.',
+          'Your risk trend is climbing. Take a short pause now and make the next task lighter.',
         actionLabel: 'Take a pause',
         triggerReason: pattern.title,
         recommendedFocus: 'early_recovery',
@@ -111,7 +204,7 @@ function recommendationFromPattern(pattern, summary) {
         priority: 'high',
         title: 'Balance load with recovery',
         message:
-          'High workload and weak recovery are appearing together. Add a recovery break before taking on another demanding block.',
+          'Workload and recovery look out of balance. Take a recovery break before the next hard task.',
         actionLabel: 'Schedule break',
         triggerReason: pattern.title,
         recommendedFocus: 'recovery',
@@ -124,7 +217,7 @@ function recommendationFromPattern(pattern, summary) {
         priority,
         title: 'Keep today steady',
         message:
-          'Your scores have been moving sharply. Keep the next step simple: hydrate, do one focused task, then take a short reset.',
+          'Your scores have been shifting a lot. Keep the next step simple: water, one focused task, then a reset.',
         actionLabel: 'Stabilize',
         triggerReason: pattern.title,
         recommendedFocus: 'stabilize_routine',
@@ -137,7 +230,7 @@ function recommendationFromPattern(pattern, summary) {
         priority,
         title: 'Support emotional energy',
         message:
-          'Emotional exhaustion is the strongest signal in your pattern. Protect sleep tonight and avoid adding one more optional task.',
+          'Emotional exhaustion is the strongest signal. Protect sleep tonight and skip one optional task.',
         actionLabel: 'Set wind-down',
         triggerReason: pattern.title,
         recommendedFocus: 'recovery',
@@ -150,7 +243,7 @@ function recommendationFromPattern(pattern, summary) {
         priority,
         title: 'Recovery needs attention',
         message:
-          'Recovery deficit is standing out. A short off-screen break or earlier stop time is more useful than pushing through.',
+          'Recovery is the part that needs care today. Take an off-screen break or stop a little earlier.',
         actionLabel: 'Take break',
         triggerReason: pattern.title,
         recommendedFocus: 'recovery',
@@ -163,7 +256,7 @@ function recommendationFromPattern(pattern, summary) {
         priority,
         title: 'Trim the load',
         message:
-          'Workload strain is the strongest signal. Choose the smallest task boundary that makes the rest of the day lighter.',
+          'Workload is the strongest signal. Set one small boundary that makes the rest of today lighter.',
         actionLabel: 'Set boundary',
         triggerReason: pattern.title,
         recommendedFocus: 'workload',
@@ -176,7 +269,7 @@ function recommendationFromPattern(pattern, summary) {
         priority,
         title: 'Reconnect gently',
         message:
-          'Detachment is standing out in your pattern. A brief check-in with someone or a grounding activity may help reduce distance.',
+          'Detachment is standing out. Try a brief check-in with someone or one grounding activity.',
         actionLabel: 'Reconnect',
         triggerReason: pattern.title,
         recommendedFocus: 'connection',
@@ -189,7 +282,7 @@ function recommendationFromPattern(pattern, summary) {
         priority,
         title: 'Make progress visible',
         message:
-          'Reduced accomplishment is the strongest signal. Pick one small finishable task and mark it clearly when done.',
+          'Progress feels like the hard part today. Pick one small task you can finish and mark it done.',
         actionLabel: 'Choose one win',
         triggerReason: pattern.title,
         recommendedFocus: 'progress',
@@ -202,7 +295,7 @@ function recommendationFromPattern(pattern, summary) {
         priority: 'low',
         title: 'Improve recommendation quality',
         message:
-          "A few missing inputs are lowering score confidence. Completing today's log will make future nudges more precise.",
+          "A few missing check-in details make nudges less precise. Finish today's log when you can.",
         actionLabel: 'Complete log',
         triggerReason: pattern.title,
         recommendedFocus: 'data_completion',
@@ -215,7 +308,7 @@ function recommendationFromPattern(pattern, summary) {
         priority: 'low',
         title: 'Build your trend baseline',
         message:
-          'VitalySync needs a few recent check-ins before it can adapt strongly. A quick daily log is enough to improve the pattern.',
+          'VitalySync needs a few recent check-ins to adapt well. A quick daily log is enough for today.',
         actionLabel: 'Log today',
         triggerReason: pattern.title,
         recommendedFocus: 'data_completion',
@@ -228,7 +321,7 @@ function recommendationFromPattern(pattern, summary) {
         priority: 'low',
         title: 'Keep the recovery trend',
         message:
-          'Your recent trend is improving. Keep one recovery habit steady today instead of adding a new goal.',
+          'Your recent trend is improving. Keep one recovery habit steady instead of adding more today.',
         actionLabel: 'Keep routine',
         triggerReason: pattern.title,
         recommendedFocus: 'maintain_recovery',
@@ -241,7 +334,7 @@ function recommendationFromPattern(pattern, summary) {
         priority: 'low',
         title: 'Keep today steady',
         message:
-          'Your recent pattern is stable. Stay consistent with hydration, movement, and a clear stop time.',
+          'Your recent pattern is steady. Keep hydration, movement, and a clear stop time simple today.',
         actionLabel: 'Continue',
         triggerReason: pattern.title,
         recommendedFocus: pattern.recommended_focus ?? 'maintenance',
@@ -261,7 +354,7 @@ function stateRecommendation(summary) {
       priority: 'urgent',
       title: 'Use extra support today',
       message:
-        'The multi-day pattern is in a critical range. Reduce load where possible and consider reaching out to trusted support.',
+        'The multi-day pattern is in a critical range. Lower what you can today and consider trusted support.',
       actionLabel: 'Reduce load',
       triggerReason: summary.adaptive_state?.reason ?? 'Critical pattern',
       recommendedFocus: 'support',
@@ -277,7 +370,7 @@ function stateRecommendation(summary) {
       priority: 'high',
       title: "Lower today's pressure",
       message:
-        'The pattern is high risk across recent data. Choose one thing to pause, delegate, or make easier today.',
+        'Recent data shows high risk. Choose one thing to pause, delegate, or make easier today.',
       actionLabel: 'Lower pressure',
       triggerReason: summary.adaptive_state?.reason ?? 'High risk pattern',
       recommendedFocus: 'load_reduction',
@@ -309,6 +402,75 @@ function hoursSince(value, now = new Date()) {
 
 function isStrongRecommendation(recommendation) {
   return recommendation.priority === 'urgent' || recommendation.priority === 'high';
+}
+
+export async function loadNudgePersonalizationProfile(client, userId) {
+  const result = await client.query(
+    `SELECT
+       u.username,
+       COALESCE(profile.role, u.role) AS role,
+       COALESCE(profile.lifestyle_type, u.lifestyle_type) AS lifestyle_type,
+       COALESCE(profile.wellness_goal, preferences.primary_goal, u.wellness_goal) AS wellness_goal,
+       CASE
+         WHEN cardinality(profile.wellness_goals) > 0 THEN profile.wellness_goals
+         WHEN cardinality(preferences.wellness_goals) > 0 THEN preferences.wellness_goals
+         ELSE u.wellness_goals
+       END AS wellness_goals,
+       to_char(profile.usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
+       to_char(profile.usual_wake_time, 'HH24:MI') AS usual_wake_time,
+       profile.exercise_goal_days,
+       profile.workload_level,
+       profile.has_extra_responsibilities,
+       profile.extra_responsibility_level
+     FROM users u
+     LEFT JOIN user_onboarding_profiles profile
+       ON profile.user_id = u.user_id
+     LEFT JOIN user_preferences preferences
+       ON preferences.user_id = u.user_id
+     WHERE u.user_id = $1`,
+    [userId]
+  );
+
+  const row = result.rows[0] ?? {};
+  const wellnessGoals = normalizeStringList(row.wellness_goals);
+  const profile = compactObject({
+    role: safeText(row.role),
+    lifestyle_type: safeText(row.lifestyle_type),
+    wellness_goal: safeText(row.wellness_goal),
+    wellness_goals: wellnessGoals.length > 0
+      ? wellnessGoals
+      : normalizeStringList(row.wellness_goal),
+    usual_sleep_time: safeText(row.usual_sleep_time),
+    usual_wake_time: safeText(row.usual_wake_time),
+    exercise_goal_days: safeText(row.exercise_goal_days),
+    workload_level: row.workload_level == null ? null : Number(row.workload_level),
+    has_extra_responsibilities: row.has_extra_responsibilities === true,
+    extra_responsibility_level:
+      row.extra_responsibility_level == null
+        ? null
+        : Number(row.extra_responsibility_level)
+  });
+
+  return {
+    displayName: displayNameFromUsername(row.username),
+    profile
+  };
+}
+
+export function personalizeNudgeRecommendation(recommendation, personalization) {
+  const userDisplayName = personalization?.displayName ?? null;
+
+  return {
+    ...recommendation,
+    message: prependDisplayName(recommendation.message, userDisplayName),
+    metadata: {
+      ...recommendation.metadata,
+      title: recommendation.title,
+      user_display_name: userDisplayName,
+      personalization_profile: personalization?.profile ?? {},
+      profile_variables_used: personalizationVariables(personalization)
+    }
+  };
 }
 
 async function loadNudgeThrottlePreferences(client, userId) {
@@ -541,6 +703,7 @@ export async function getAdaptiveNudgeRecommendations(
   const summary = await getBurnoutPatternSummary(client, userId, { endDate });
   const recentEvents = await loadRecentNudgeEvents(client, userId);
   const preferences = await loadNudgeThrottlePreferences(client, userId);
+  const personalization = await loadNudgePersonalizationProfile(client, userId);
   const stateDriven = stateRecommendation(summary);
   const patternDriven = (summary.patterns ?? []).map((pattern) =>
     recommendationFromPattern(pattern, summary)
@@ -556,13 +719,17 @@ export async function getAdaptiveNudgeRecommendations(
     0,
     normalizedLimit
   );
+  const personalizedRanked = ranked.map((recommendation) =>
+    personalizeNudgeRecommendation(recommendation, personalization)
+  );
   const recommendations = useAi
-    ? await enhanceNudgeRecommendations(client, userId, ranked, {
+    ? await enhanceNudgeRecommendations(client, userId, personalizedRanked, {
       summary,
       preferences,
+      personalization,
       enhanceThrottled: !recordShown
     })
-    : ranked;
+    : personalizedRanked;
 
   if (!recordShown || recommendations.length === 0) {
     return {

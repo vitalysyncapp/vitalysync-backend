@@ -7,7 +7,14 @@ import {
   getNudgeRecommendations,
   updateNudgeEventStatus,
 } from '../src/controllers/adaptive.controller.js';
-import { applyRecentFeedback } from '../src/services/adaptiveNudgeService.js';
+import {
+  applyRecentFeedback,
+  personalizeNudgeRecommendation
+} from '../src/services/adaptiveNudgeService.js';
+import {
+  buildAiContext,
+  ensureNameInMessage
+} from '../src/services/aiNudgeService.js';
 import { createMockResponse } from './controllerTestHelpers.js';
 
 function recommendation({
@@ -153,6 +160,71 @@ test('smart nudge feedback does not let accepted low priority outrank high prior
   );
 
   assert.equal(ranked[0].nudge_type, 'load_reduction_check');
+});
+
+test('smart nudge personalization adds username metadata without changing ranking fields', () => {
+  const original = recommendation({
+    nudgeType: 'recovery_break',
+    priority: 'high'
+  });
+  const personalized = personalizeNudgeRecommendation(original, {
+    displayName: 'Vitaly',
+    profile: {
+      role: 'Student',
+      wellness_goals: ['Improve sleep', 'Manage burnout'],
+      usual_sleep_time: '22:30'
+    }
+  });
+
+  assert.equal(personalized.nudge_type, original.nudge_type);
+  assert.equal(personalized.priority, original.priority);
+  assert.equal(personalized.recommended_focus, original.recommended_focus);
+  assert.match(personalized.message, /^Vitaly, /);
+  assert.equal(personalized.metadata.user_display_name, 'Vitaly');
+  assert.deepEqual(personalized.metadata.personalization_profile.wellness_goals, [
+    'Improve sleep',
+    'Manage burnout'
+  ]);
+  assert.deepEqual(personalized.metadata.profile_variables_used, [
+    'username',
+    'role',
+    'wellness_goals',
+    'routine_times'
+  ]);
+});
+
+test('AI nudge context carries personal context and keeps username in message locally', () => {
+  const personalized = personalizeNudgeRecommendation(
+    recommendation({ nudgeType: 'small_win', recommendedFocus: 'progress' }),
+    {
+      displayName: 'Alex',
+      profile: {
+        lifestyle_type: 'Lightly Active',
+        exercise_goal_days: '3-4 days',
+        workload_level: 4
+      }
+    }
+  );
+  const context = buildAiContext(
+    personalized,
+    {
+      latest_score: { risk_level: 'moderate', overall_score: 52 },
+      adaptive_state: { state: 'watch', confidence_score: 82 },
+      windows: {},
+      patterns: []
+    },
+    feedbackPreferences
+  );
+
+  assert.equal(context.personal_context.user_display_name, 'Alex');
+  assert.equal(context.personal_context.profile.workload_level, 4);
+  assert.equal(
+    context.personal_context.visible_personalization.use_username_once_when_available,
+    true
+  );
+  assert.equal(context.guardrails.do_not_change_priority_or_risk, true);
+  assert.equal(context.guardrails.do_not_reference_email_age_or_gender, true);
+  assert.match(ensureNameInMessage('Take one small step.', 'Alex'), /^Alex, /);
 });
 
 test('nudge event creation casts reused status parameter for PostgreSQL', async () => {
