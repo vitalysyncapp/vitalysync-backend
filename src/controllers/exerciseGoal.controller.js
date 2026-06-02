@@ -178,6 +178,66 @@ export async function getTodayExerciseGoal(req, res) {
   }
 }
 
+export async function getExerciseGoalHistory(req, res) {
+  const userId = Number(req.params.userId);
+  const endDate = normalizeText(req.query?.end, todayKey());
+  const startDate = normalizeText(
+    req.query?.start,
+    new Date(Date.now() - 28 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  );
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return res.status(400).json({ message: 'Valid user_id is required' });
+  }
+
+  if (!isValidDateString(startDate) || !isValidDateString(endDate)) {
+    return res.status(400).json({ message: 'Valid start and end dates are required' });
+  }
+
+  if (startDate > endDate) {
+    return res.status(400).json({ message: 'start must be before or equal to end' });
+  }
+
+  try {
+    const userExists = await ensureUserExists(pool, userId);
+    if (!userExists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const result = await pool.query(
+      `SELECT
+         goal_id,
+         user_id,
+         log_date,
+         recommended_by,
+         exercise_name,
+         exercise_category,
+         target_distance_meters,
+         target_minutes,
+         target_reps,
+         completion_method,
+         status,
+         completed_at,
+         created_at,
+         updated_at
+       FROM daily_exercise_goals
+       WHERE user_id = $1
+         AND log_date BETWEEN $2 AND $3
+       ORDER BY log_date ASC`,
+      [userId, startDate, endDate]
+    );
+
+    return res.status(200).json({
+      start_date: startDate,
+      end_date: endDate,
+      goals: result.rows.map(formatGoal),
+    });
+  } catch (error) {
+    console.error('Get exercise goal history error:', error);
+    return res.status(500).json({ message: 'Failed to fetch exercise goal history' });
+  }
+}
+
 export async function chooseExerciseGoal(req, res) {
   const userId = Number(req.body?.user_id);
   const payload = normalizeChoicePayload(req.body);
