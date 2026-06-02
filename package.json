@@ -4,7 +4,7 @@
   "type": "module",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "npm run migrate && node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate": "node scripts/run-migrations.js",
     "test": "node --test \"test/**/*.test.js\""

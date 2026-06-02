@@ -85,6 +85,6 @@ WHERE onboarding_completed = FALSE
     WHERE preferences.user_id = users.user_id
   );
 
-ALTER TABLE users DROP COLUMN IF EXISTS age;
-ALTER TABLE users DROP COLUMN IF EXISTS gender;
-ALTER TABLE users DROP COLUMN IF EXISTS user_type;
+-- Keep profile columns in place. Later migrations and current auth/profile
+-- code use these values, and startup migrations may run against existing
+-- databases that were created before schema_migrations tracking existed.
