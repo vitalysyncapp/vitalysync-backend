@@ -7,6 +7,7 @@ import {
   getRequiredOnboardingStatus,
   getOnboardingSummary,
   submitOnboarding,
+  updateBurnoutBaseline,
   updateWellnessProfile,
   updateOnboarding,
   updatePreferences
@@ -17,6 +18,7 @@ const router = express.Router();
 router.get('/status/:userId', requireMatchingParamUser(), getRequiredOnboardingStatus);
 router.post('/submit', submitOnboarding);
 router.get('/:userId', requireMatchingParamUser(), getOnboardingSummary);
+router.put('/:userId/burnout-baseline', requireMatchingParamUser(), updateBurnoutBaseline);
 router.put('/:userId/wellness-profile', requireMatchingParamUser(), updateWellnessProfile);
 router.post('/', createOnboarding);
 router.put('/:userId', requireMatchingParamUser(), updateOnboarding);

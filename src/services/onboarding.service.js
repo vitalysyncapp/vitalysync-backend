@@ -1,5 +1,10 @@
 import pool from '../config/db.js';
-import { calculateBurnoutBaselineScore } from './burnoutScoringService.js';
+import {
+  calculateBurnoutBaselineScore,
+  getLatestBurnoutScore,
+  upsertBurnoutScoresForRange
+} from './burnoutScoringService.js';
+import { addDays, formatDateOnly } from './burnoutScoringEngine.js';
 
 const ROLE_OPTIONS = new Set([
   'Student',
@@ -736,6 +741,99 @@ export async function submitRequiredOnboarding(payload) {
       profile: savedProfile,
       scores,
       baseline_for_ai: buildAiBaseline(savedProfile)
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
+  const userId = parseUserId(userIdValue);
+  const burnoutAnswers = buildBurnoutAnswerRecords(payload?.burnout_answers);
+  const scores = calculateBurnoutBaselineScore(burnoutAnswers);
+  const today = formatDateOnly(new Date());
+  const refreshStartDate = addDays(today, -27);
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const userResult = await client.query(
+      'SELECT user_id FROM users WHERE user_id = $1 FOR UPDATE',
+      [userId]
+    );
+
+    if (userResult.rowCount === 0) {
+      throw new OnboardingServiceError('User not found', 404);
+    }
+
+    const profileResult = await client.query(
+      `UPDATE user_onboarding_profiles
+       SET emotional_exhaustion_score = $2,
+           depersonalization_score = $3,
+           personal_accomplishment_score = $4,
+           initial_burnout_score = $5,
+           initial_burnout_level = $6,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = $1
+       RETURNING
+         id,
+         user_id,
+         role,
+         lifestyle_type,
+         wellness_goal,
+         wellness_goals,
+         to_char(usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
+         to_char(usual_wake_time, 'HH24:MI') AS usual_wake_time,
+         exercise_goal_days,
+         workload_level,
+         has_extra_responsibilities,
+         extra_responsibility_level,
+         emotional_exhaustion_score,
+         depersonalization_score,
+         personal_accomplishment_score,
+         initial_burnout_score,
+         initial_burnout_level,
+         created_at,
+         updated_at`,
+      [
+        userId,
+        scores.emotional_exhaustion_score,
+        scores.depersonalization_score,
+        scores.personal_accomplishment_score,
+        scores.initial_burnout_score,
+        scores.initial_burnout_level
+      ]
+    );
+
+    if (profileResult.rowCount === 0) {
+      throw new OnboardingServiceError('Onboarding profile not found', 404);
+    }
+
+    await insertAnswerRecords(client, userId, burnoutAnswers);
+
+    const refreshedScores = await upsertBurnoutScoresForRange(
+      client,
+      userId,
+      refreshStartDate,
+      today
+    );
+    const latestScore = await getLatestBurnoutScore(client, userId);
+
+    await client.query('COMMIT');
+
+    const savedProfile = profileResult.rows[0];
+
+    return {
+      message: 'Burnout baseline updated successfully',
+      profile: savedProfile,
+      scores,
+      baseline_for_ai: buildAiBaseline(savedProfile),
+      latest_score: latestScore,
+      refreshed_scores_count: refreshedScores.length
     };
   } catch (error) {
     await client.query('ROLLBACK');
