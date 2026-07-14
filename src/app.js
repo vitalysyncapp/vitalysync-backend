@@ -17,6 +17,7 @@ import logRoutes from './routes/log.routes.js';
 import nutritionRoutes from './routes/nutrition.routes.js';
 import onboardingRoutes from './routes/onboarding.routes.js';
 import profileRoutes from './routes/profile.routes.js';
+import streakRoutes from './routes/streak.routes.js';
 
 const app = express();
 
@@ -44,6 +45,7 @@ app.use('/api/logs', logRoutes);
 app.use('/api/nutrition', nutritionRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/profile', profileRoutes);
+app.use('/api/streaks', streakRoutes);
 
 app.use('/api', (req, res) => {
   res.status(404).json({

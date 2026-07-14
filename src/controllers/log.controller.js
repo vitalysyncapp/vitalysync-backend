@@ -3,6 +3,14 @@ import {
   upsertBurnoutScoreForDate,
   upsertBurnoutScoresForWeek
 } from '../services/burnoutScoringService.js';
+import {
+  StreakServiceError,
+  awardStreakRewardsForLog,
+  formatStreakPayload as formatStreakPayloadForClient,
+  normalizeRestoreDecision,
+  prepareStreakForNewLog,
+  readStreakOverview
+} from '../services/streak.service.js';
 
 const ALLOWED_WORKLOAD_HOURS_BANDS = new Set([
   'None',
@@ -152,11 +160,7 @@ async function readUserStreak(client, userId) {
 }
 
 function formatStreakPayload(streakRow) {
-  return {
-    current_streak: streakRow?.current_streak ?? 0,
-    longest_streak: streakRow?.longest_streak ?? 0,
-    last_logged_date: streakRow?.last_logged_date ?? null
-  };
+  return formatStreakPayloadForClient(streakRow);
 }
 
 export async function getTodayLog(req, res) {
@@ -227,16 +231,25 @@ export async function getCurrentStreak(req, res) {
   }
 
   try {
-    const streakRow = await readUserStreak(pool, userId);
+    const overview = await readStreakOverview(userId);
 
-    if (!streakRow) {
+    if (!overview) {
       return res.status(404).json({ message: 'User not found' });
     }
 
     return res.status(200).json({
-      streak: formatStreakPayload(streakRow)
+      streak: overview.streak,
+      savers: overview.savers,
+      protected_day_count: overview.protected_day_count
     });
   } catch (error) {
+    if (error instanceof StreakServiceError) {
+      return res.status(error.statusCode).json({
+        message: error.message,
+        ...error.details
+      });
+    }
+
     console.error('Get streak error:', error);
     return res.status(500).json({ message: 'Failed to fetch streak' });
   }
@@ -395,7 +408,8 @@ export async function saveDailyLog(req, res) {
     exercise_goal_name: exerciseGoalName,
     exercise_goal_completed: exerciseGoalCompleted,
     exercise_goal_source: exerciseGoalSource,
-    exercise_goal_status: exerciseGoalStatus
+    exercise_goal_status: exerciseGoalStatus,
+    streak_restore_decision: streakRestoreDecision
   } = req.body;
 
   const userId = Number(rawUserId);
@@ -417,6 +431,9 @@ export async function saveDailyLog(req, res) {
   const normalizedExerciseGoalCompleted = normalizeOptionalBoolean(exerciseGoalCompleted);
   const normalizedExerciseGoalSource = normalizeNullableText(exerciseGoalSource);
   const normalizedExerciseGoalStatus = normalizeNullableText(exerciseGoalStatus);
+  const normalizedStreakRestoreDecision = normalizeRestoreDecision(
+    streakRestoreDecision
+  );
 
   if (!Number.isInteger(userId) || userId <= 0) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -506,8 +523,13 @@ export async function saveDailyLog(req, res) {
     const isRedo = existingLogResult.rowCount > 0;
     let updatedStreak = streakRow.current_streak;
     let longestStreak = streakRow.longest_streak;
-    const previousLogDate = parseDateOnly(streakRow.last_logged_date);
-    const currentLogDate = parseDateOnly(logDate);
+    let streakRestore = {
+      required: false,
+      decision: normalizedStreakRestoreDecision,
+      missing_dates: [],
+      savers_used: 0
+    };
+    let streakRewards = [];
 
     if (isRedo) {
       await client.query(
@@ -557,6 +579,16 @@ export async function saveDailyLog(req, res) {
         ]
       );
     } else {
+      const streakUpdate = await prepareStreakForNewLog(client, {
+        userId,
+        logDate,
+        streakRow,
+        restoreDecision: normalizedStreakRestoreDecision
+      });
+      updatedStreak = streakUpdate.updatedStreak;
+      longestStreak = streakUpdate.longestStreak;
+      streakRestore = streakUpdate.restore;
+
       await client.query(
         `INSERT INTO daily_logs (
            user_id,
@@ -609,22 +641,6 @@ export async function saveDailyLog(req, res) {
         ]
       );
 
-      if (!previousLogDate) {
-        updatedStreak = 1;
-      } else {
-        const dayDifference = Math.round(
-          (currentLogDate - previousLogDate) / (1000 * 60 * 60 * 24)
-        );
-
-        if (dayDifference === 1) {
-          updatedStreak = streakRow.current_streak + 1;
-        } else if (dayDifference > 1) {
-          updatedStreak = 1;
-        }
-      }
-
-      longestStreak = Math.max(longestStreak, updatedStreak);
-
       await client.query(
         `UPDATE user_streaks
          SET current_streak = $2,
@@ -634,6 +650,12 @@ export async function saveDailyLog(req, res) {
          WHERE user_id = $1`,
         [userId, updatedStreak, longestStreak, logDate]
       );
+
+      streakRewards = await awardStreakRewardsForLog(client, {
+        userId,
+        logDate,
+        currentStreak: updatedStreak
+      });
     }
 
     const savedLogResult = await client.query(
@@ -689,10 +711,19 @@ export async function saveDailyLog(req, res) {
       is_redo: isRedo,
       log: savedLogResult.rows[0],
       burnout_score: burnoutScore,
-      streak: formatStreakPayload(currentStreakRow.rows[0])
+      streak: formatStreakPayload(currentStreakRow.rows[0]),
+      streak_restore: streakRestore,
+      streak_rewards: streakRewards
     });
   } catch (error) {
     await client.query('ROLLBACK');
+    if (error instanceof StreakServiceError) {
+      return res.status(error.statusCode).json({
+        message: error.message,
+        ...error.details
+      });
+    }
+
     console.error('Save daily log error:', error);
     return res.status(500).json({ message: 'Failed to save daily log' });
   } finally {
