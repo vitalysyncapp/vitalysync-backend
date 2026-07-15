@@ -675,12 +675,23 @@ function buildSectionFilter(section, viewerContext, params) {
   };
 }
 
-function scoreExpression(metric, todayParam, monthStartParam, nextMonthParam) {
+function appendQueryParam(params, value) {
+  params.push(value);
+  return params.length;
+}
+
+function scoreExpression(metric, params, dates) {
   if (metric === 'longest') {
     return 'COALESCE(streaks.longest_streak, 0)';
   }
 
   if (metric === 'month') {
+    const monthStartParam = appendQueryParam(params, dates.currentMonthStart);
+    const nextMonthParam = appendQueryParam(
+      params,
+      dates.currentNextMonthStart
+    );
+
     return `(
       SELECT COUNT(*)::INTEGER
       FROM (
@@ -698,6 +709,8 @@ function scoreExpression(metric, todayParam, monthStartParam, nextMonthParam) {
       ) month_scores
     )`;
   }
+
+  const todayParam = appendQueryParam(params, dates.today);
 
   return `CASE
     WHEN streaks.last_logged_date IS NULL THEN 0
@@ -729,9 +742,13 @@ export async function readLeaderboard(userIdValue, options = {}) {
     return null;
   }
 
-  const params = [userId, today, currentMonthStart, currentNextMonthStart];
+  const params = [userId];
+  const scoreSql = scoreExpression(metric, params, {
+    today,
+    currentMonthStart,
+    currentNextMonthStart,
+  });
   const sectionFilter = buildSectionFilter(section, viewerContext, params);
-  const scoreSql = scoreExpression(metric, 2, 3, 4);
   params.push(limit);
 
   const result = await client.query(

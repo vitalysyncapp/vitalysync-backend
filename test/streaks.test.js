@@ -202,3 +202,79 @@ test('leaderboard rows stay privacy-safe', async () => {
   assert.equal(leaderboard.rows[0].display_name, 'Vitaly One');
   assert.equal(leaderboard.rows[0].is_current_user, true);
 });
+
+test('leaderboard SQL uses contiguous parameters for every filter', async () => {
+  const sections = ['global', 'area', 'role', 'wellness'];
+  const metrics = ['current', 'month', 'longest'];
+
+  for (const section of sections) {
+    for (const metric of metrics) {
+      const client = mockClient();
+
+      await readLeaderboard(1, {
+        client,
+        section,
+        metric,
+        today: '2026-06-21',
+      });
+
+      const query = client.calls.find((call) => call.sql.includes('scored AS'));
+      assert.ok(query, `missing leaderboard query for ${section}/${metric}`);
+
+      const usedParams = [...query.sql.matchAll(/\$(\d+)/g)].map((match) =>
+        Number(match[1])
+      );
+      const uniqueParams = [...new Set(usedParams)].sort((a, b) => a - b);
+
+      assert.deepEqual(
+        uniqueParams,
+        Array.from({ length: query.params.length }, (_, index) => index + 1),
+        `non-contiguous parameters for ${section}/${metric}`
+      );
+      assert.equal(
+        Math.max(...usedParams),
+        query.params.length,
+        `parameter count mismatch for ${section}/${metric}`
+      );
+    }
+  }
+});
+
+test('leaderboard only binds values required by its metric and section', async () => {
+  const cases = [
+    {
+      section: 'global',
+      metric: 'current',
+      expected: [1, '2026-06-21', 50],
+    },
+    { section: 'global', metric: 'longest', expected: [1, 50] },
+    {
+      section: 'area',
+      metric: 'current',
+      expected: [1, '2026-06-21', 'Manila', 50],
+    },
+    {
+      section: 'role',
+      metric: 'longest',
+      expected: [1, 'Student', 50],
+    },
+  ];
+
+  for (const testCase of cases) {
+    const client = mockClient();
+
+    await readLeaderboard(1, {
+      client,
+      section: testCase.section,
+      metric: testCase.metric,
+      today: '2026-06-21',
+    });
+
+    const query = client.calls.find((call) => call.sql.includes('scored AS'));
+    assert.deepEqual(
+      query.params,
+      testCase.expected,
+      `unexpected values for ${testCase.section}/${testCase.metric}`
+    );
+  }
+});
