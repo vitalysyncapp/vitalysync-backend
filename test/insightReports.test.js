@@ -6,6 +6,7 @@ import {
 } from '../src/controllers/adaptive.controller.js';
 import {
   listInsightReports,
+  previousUtcDateKey,
   refreshInsightReports
 } from '../src/services/insightReportService.js';
 import { createMockResponse } from './controllerTestHelpers.js';
@@ -264,7 +265,18 @@ test('insight report refresh validates user id before database work', async () =
   assert.equal(res.body.message, 'Valid user_id is required');
 });
 
-test('daily insight report refresh upserts a daily report', async () => {
+test('previous UTC report date crosses month and year boundaries', () => {
+  assert.equal(
+    previousUtcDateKey(new Date('2026-01-01T00:00:00.000Z')),
+    '2025-12-31'
+  );
+  assert.equal(
+    previousUtcDateKey(new Date('2026-03-01T23:59:59.999Z')),
+    '2026-02-28'
+  );
+});
+
+test('daily insight report refresh inserts yesterday-context report once', async () => {
   const client = createInsightReportClient({ dailyData: true });
 
   const reports = await refreshInsightReports(client, 1, {
@@ -279,8 +291,100 @@ test('daily insight report refresh upserts a daily report', async () => {
   assert.equal(reports[0].metrics.daily_accomplishment_level, 3);
   assert.match(reports[0].summary, /detachment 4\/5/);
   assert.match(reports[0].summary, /focus 2\/5/);
+  assert.match(reports[0].summary, /Yesterday's check-in/);
   assert.equal(client.inserts.length, 1);
-  assert.match(client.inserts[0].sql, /ON CONFLICT/);
+  assert.match(client.inserts[0].sql, /ON CONFLICT[\s\S]*DO NOTHING/);
+});
+
+test('repeated daily refresh returns the immutable existing report', async () => {
+  const baseClient = createInsightReportClient({ dailyData: true });
+  let storedReport = null;
+  let sourceQueryCount = 0;
+
+  const client = {
+    async query(sql, params) {
+      if (
+        sql.includes('FROM user_insight_reports') &&
+        sql.includes('report_type = $2')
+      ) {
+        return { rows: storedReport ? [storedReport] : [] };
+      }
+
+      if (sql.includes('INSERT INTO user_insight_reports')) {
+        const result = await baseClient.query(sql, params);
+        storedReport = result.rows[0];
+        return result;
+      }
+
+      sourceQueryCount += 1;
+      return baseClient.query(sql, params);
+    }
+  };
+
+  const first = await refreshInsightReports(client, 1, {
+    date: '2026-05-21'
+  });
+  const sourceQueriesAfterFirstRefresh = sourceQueryCount;
+  const second = await refreshInsightReports(client, 1, {
+    date: '2026-05-21'
+  });
+
+  assert.equal(first.length, 1);
+  assert.equal(second.length, 1);
+  assert.equal(baseClient.inserts.length, 1);
+  assert.equal(sourceQueryCount, sourceQueriesAfterFirstRefresh);
+  assert.deepEqual(second[0], first[0]);
+  assert.equal(second[0].updated_at, '2026-05-21T00:00:00.000Z');
+});
+
+test('daily insert conflict returns the concurrently-created report', async () => {
+  const baseClient = createInsightReportClient({ dailyData: true });
+  const concurrentReport = {
+    insight_report_id: 91,
+    user_id: 1,
+    report_type: 'daily',
+    period_start: '2026-05-21',
+    period_end: '2026-05-21',
+    title: 'Daily wellness report',
+    summary: 'Immutable report from the winning request.',
+    priority: 'low',
+    metrics: { date: '2026-05-21' },
+    source_snapshot: {},
+    created_at: '2026-05-22T07:00:00.000Z',
+    updated_at: '2026-05-22T07:00:00.000Z'
+  };
+  let lookupCount = 0;
+  let insertSql = '';
+
+  const client = {
+    async query(sql, params) {
+      if (
+        sql.includes('FROM user_insight_reports') &&
+        sql.includes('report_type = $2')
+      ) {
+        lookupCount += 1;
+        return { rows: lookupCount === 1 ? [] : [concurrentReport] };
+      }
+
+      if (sql.includes('INSERT INTO user_insight_reports')) {
+        insertSql = sql;
+        return { rowCount: 0, rows: [] };
+      }
+
+      return baseClient.query(sql, params);
+    }
+  };
+
+  const reports = await refreshInsightReports(client, 1, {
+    date: '2026-05-21'
+  });
+
+  assert.equal(lookupCount, 2);
+  assert.match(insertSql, /ON CONFLICT[\s\S]*DO NOTHING/);
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].insight_report_id, 91);
+  assert.equal(reports[0].summary, concurrentReport.summary);
+  assert.equal(reports[0].updated_at, concurrentReport.updated_at);
 });
 
 test('weekly insight report refresh skips non-Sunday dates', async () => {

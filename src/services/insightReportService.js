@@ -19,8 +19,8 @@ const REPORT_FIELDS = `
   updated_at
 `;
 
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+export function previousUtcDateKey(now = new Date()) {
+  return addDays(now.toISOString().slice(0, 10), -1);
 }
 
 function isSundayDate(value) {
@@ -119,13 +119,29 @@ export async function listInsightReports(client, userId, { limit = 30 } = {}) {
 export async function refreshInsightReports(
   client,
   userId,
-  { date = todayKey() } = {}
+  { date = previousUtcDateKey() } = {}
 ) {
   const normalizedDate = formatDateOnly(date);
   const reports = [];
-  const dailyReport = await buildDailyReport(client, userId, normalizedDate);
-  if (dailyReport) {
-    reports.push(await upsertInsightReport(client, userId, dailyReport));
+  let persistedDailyReport = await findInsightReport(
+    client,
+    userId,
+    'daily',
+    normalizedDate,
+    normalizedDate
+  );
+  if (!persistedDailyReport) {
+    const dailyReport = await buildDailyReport(client, userId, normalizedDate);
+    if (dailyReport) {
+      persistedDailyReport = await insertInsightReportOnce(
+        client,
+        userId,
+        dailyReport
+      );
+    }
+  }
+  if (persistedDailyReport) {
+    reports.push(persistedDailyReport);
   }
 
   if (isSundayDate(normalizedDate)) {
@@ -548,6 +564,72 @@ async function buildWeeklyReport(client, userId, weekStart) {
   };
 }
 
+async function findInsightReport(
+  client,
+  userId,
+  reportType,
+  periodStart,
+  periodEnd
+) {
+  const result = await client.query(
+    `SELECT ${REPORT_FIELDS}
+     FROM user_insight_reports
+     WHERE user_id = $1
+       AND report_type = $2
+       AND period_start = $3
+       AND period_end = $4
+     LIMIT 1`,
+    [userId, reportType, periodStart, periodEnd]
+  );
+
+  const row = result.rows[0];
+  return row ? formatReportRow(row) : null;
+}
+
+async function insertInsightReportOnce(client, userId, report) {
+  const result = await client.query(
+    `INSERT INTO user_insight_reports (
+       user_id,
+       report_type,
+       period_start,
+       period_end,
+       title,
+       summary,
+       priority,
+       metrics,
+       source_snapshot
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)
+     ON CONFLICT (user_id, report_type, period_start, period_end)
+     DO NOTHING
+     RETURNING ${REPORT_FIELDS}`,
+    [
+      userId,
+      report.reportType,
+      report.periodStart,
+      report.periodEnd,
+      report.title,
+      report.summary,
+      report.priority,
+      JSON.stringify(report.metrics),
+      JSON.stringify(report.sourceSnapshot)
+    ]
+  );
+
+  const insertedRow = result.rows[0];
+  if (insertedRow) {
+    return formatReportRow(insertedRow);
+  }
+
+  return findInsightReport(
+    client,
+    userId,
+    report.reportType,
+    report.periodStart,
+    report.periodEnd
+  );
+}
+
 async function upsertInsightReport(client, userId, report) {
   const result = await client.query(
     `INSERT INTO user_insight_reports (
@@ -702,7 +784,7 @@ function dailySummary({
   riskLevel
 }) {
   if (burnout) {
-    return `Burnout risk is ${riskLevel} at ${burnoutScore}/100. Today's check-in shows sleep ${sleepHours || '--'}h, stress ${stressLevel || '--'}/5, detachment ${likertText(dailyDetachmentLevel)}/5, focus ${likertText(dailyFocusLevel)}/5, and accomplishment ${likertText(dailyAccomplishmentLevel)}/5.`;
+    return `Burnout risk is ${riskLevel} at ${burnoutScore}/100. Yesterday's check-in shows sleep ${sleepHours || '--'}h, stress ${stressLevel || '--'}/5, detachment ${likertText(dailyDetachmentLevel)}/5, focus ${likertText(dailyFocusLevel)}/5, and accomplishment ${likertText(dailyAccomplishmentLevel)}/5.`;
   }
 
   if (log) {
@@ -712,14 +794,14 @@ function dailySummary({
     const habitText = habits.length > 0
       ? `${habits.length} recovery habit${habits.length === 1 ? '' : 's'}`
       : 'no recovery habits logged';
-    return `Today's log shows ${sleepHours}h sleep, stress ${stressLevel || '--'}/5, detachment ${likertText(dailyDetachmentLevel)}/5, focus ${likertText(dailyFocusLevel)}/5, ${symptomText}, and ${habitText}.`;
+    return `Yesterday's log shows ${sleepHours}h sleep, stress ${stressLevel || '--'}/5, detachment ${likertText(dailyDetachmentLevel)}/5, focus ${likertText(dailyFocusLevel)}/5, ${symptomText}, and ${habitText}.`;
   }
 
   if (activity || nutrition) {
-    return `Today's tracked data shows ${steps.toLocaleString()} steps and ${mealCount} logged meal${mealCount === 1 ? '' : 's'}. Add a daily check-in to complete the burnout report.`;
+    return `Yesterday's tracked data shows ${steps.toLocaleString()} steps and ${mealCount} logged meal${mealCount === 1 ? '' : 's'}. Add a daily check-in to complete the burnout report.`;
   }
 
-  return 'A daily wellness snapshot is available from today\'s tracked data.';
+  return 'A daily wellness snapshot is available from yesterday\'s tracked data.';
 }
 
 function weeklySummary({
