@@ -663,7 +663,7 @@ export async function submitRequiredOnboarding(payload) {
     await client.query('BEGIN');
 
     const userResult = await client.query(
-      'SELECT user_id FROM users WHERE user_id = $1 FOR UPDATE',
+      'SELECT user_id, age, gender FROM users WHERE user_id = $1 FOR UPDATE',
       [userId]
     );
 
@@ -743,11 +743,19 @@ export async function submitRequiredOnboarding(payload) {
     );
 
     const savedProfile = profileResult.rows[0];
+    const user = userResult.rows[0];
 
     await ensureDefaultNutritionCalorieGoal({
       client,
       userId,
-      storedBmi: savedProfile.bmi
+      profile: {
+        age: user.age,
+        gender: user.gender,
+        height_cm: savedProfile.height_cm,
+        weight_kg: savedProfile.weight_kg,
+        bmi: savedProfile.bmi,
+        lifestyle_type: savedProfile.lifestyle_type
+      }
     });
 
     await insertAnswerRecords(client, userId, answerRecords);
@@ -1215,7 +1223,7 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
     await client.query('BEGIN');
 
     const userResult = await client.query(
-      `SELECT user_id, wellness_goal, wellness_goals
+      `SELECT user_id, age, gender, wellness_goal, wellness_goals
        FROM users
        WHERE user_id = $1
        FOR UPDATE`,
@@ -1383,10 +1391,18 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
     const savedProfile = profileResult.rows[0];
 
     if (bodyMetricsChanged && savedProfile.bmi != null) {
+      const user = userResult.rows[0];
       await ensureDefaultNutritionCalorieGoal({
         client,
         userId,
-        storedBmi: savedProfile.bmi
+        profile: {
+          age: user.age,
+          gender: user.gender,
+          height_cm: savedProfile.height_cm,
+          weight_kg: savedProfile.weight_kg,
+          bmi: savedProfile.bmi,
+          lifestyle_type: savedProfile.lifestyle_type ?? lifestyleType
+        }
       });
     }
 

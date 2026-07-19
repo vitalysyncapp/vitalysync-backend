@@ -172,8 +172,11 @@ test('onboarding persists server-calculated body metrics', async () => {
         return { rowCount: 0, rows: [] };
       }
 
-      if (text.includes('SELECT user_id FROM users')) {
-        return { rowCount: 1, rows: [{ user_id: 1 }] };
+      if (text.includes('FROM users') && text.includes('FOR UPDATE')) {
+        return {
+          rowCount: 1,
+          rows: [{ user_id: 1, age: 30, gender: 'Other' }],
+        };
       }
 
       if (text.includes('INSERT INTO user_onboarding_profiles')) {
@@ -244,13 +247,18 @@ test('onboarding persists server-calculated body metrics', async () => {
 
     assert.deepEqual(profileInsert.values.slice(-3), [180, 80, 24.7]);
     assert.deepEqual(legacyInsert.values.slice(-3), [180, 80, 24.7]);
-    assert.deepEqual(nutritionGoalInsert.values, [
+    assert.deepEqual(nutritionGoalInsert.values.slice(0, 5), [
       1,
       'nutrition_calories',
-      2000,
+      2300,
       'kcal',
       'system_default',
     ]);
+    assert.deepEqual(JSON.parse(nutritionGoalInsert.values[5]), {
+      balanced_kcal: 2300,
+      balanced_kcal_source: 'wellness_profile',
+      calculation_basis: 'age_height_weight_bmi_lifestyle',
+    });
     assert.equal(response.profile.bmi, 24.7);
   } finally {
     pool.connect = originalConnect;
@@ -274,6 +282,8 @@ test('wellness profile metric updates merge stored values and refresh the system
           rows: [
             {
               user_id: 1,
+              age: 30,
+              gender: 'Other',
               wellness_goal: 'Improve sleep',
               wellness_goals: ['Improve sleep'],
             },
@@ -362,13 +372,18 @@ test('wellness profile metric updates merge stored values and refresh the system
     );
 
     assert.deepEqual(profileInsert.values.slice(-3), [160, 80, 31.3]);
-    assert.deepEqual(nutritionGoalUpsert.values, [
+    assert.deepEqual(nutritionGoalUpsert.values.slice(0, 5), [
       1,
       'nutrition_calories',
-      1800,
+      2150,
       'kcal',
       'system_default',
     ]);
+    assert.deepEqual(JSON.parse(nutritionGoalUpsert.values[5]), {
+      balanced_kcal: 2150,
+      balanced_kcal_source: 'wellness_profile',
+      calculation_basis: 'age_height_weight_bmi_lifestyle',
+    });
     assert.ok(
       answerUpdates.some(
         (query) => query.values[1] === 'height_cm' && query.values[4] === '160'

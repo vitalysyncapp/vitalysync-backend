@@ -1,5 +1,8 @@
 import pool from '../config/db.js';
-import { defaultCalorieGoalForStoredBmi } from './nutrition.service.js';
+import {
+  calorieGoalMetadata,
+  defaultCalorieGoalForProfile,
+} from './nutrition.service.js';
 
 export const GOAL_TYPES = [
   'wellness',
@@ -198,11 +201,16 @@ function hydrationGoalFromActivity(activity) {
   return 2.5;
 }
 
-function defaultNutritionCaloriesFromBmi(profile, legacyOnboarding) {
-  const storedBmi = profile?.bmi ?? legacyOnboarding?.bmi;
-
+function defaultNutritionCaloriesFromProfile(profile, legacyOnboarding) {
   try {
-    return defaultCalorieGoalForStoredBmi(storedBmi);
+    return defaultCalorieGoalForProfile({
+      age: profile?.age,
+      gender: profile?.gender,
+      height_cm: profile?.height_cm ?? legacyOnboarding?.height_cm,
+      weight_kg: profile?.weight_kg ?? legacyOnboarding?.weight_kg,
+      bmi: profile?.bmi ?? legacyOnboarding?.bmi,
+      lifestyle_type: profile?.lifestyle_type ?? legacyOnboarding?.activity_level,
+    });
   } catch {
     return null;
   }
@@ -326,19 +334,35 @@ export function normalizeGoalsPayload(payload = {}) {
 }
 
 function formatGoal(row, fallback) {
-  const targetValue =
-    row?.target_value == null ? fallback.target_value : Number(row.target_value);
-  const targetText = row?.target_text ?? fallback.target_text;
-  const unit = row?.unit ?? fallback.unit;
   const goalType = row?.goal_type ?? fallback.goal_type;
+  const useProfileNutritionDefault =
+    goalType === 'nutrition_calories' &&
+    row?.source === 'system_default' &&
+    fallback.source === 'system_default';
+  const targetValue =
+    useProfileNutritionDefault || row?.target_value == null
+      ? fallback.target_value
+      : Number(row.target_value);
+  const targetText = useProfileNutritionDefault
+    ? fallback.target_text
+    : row?.target_text ?? fallback.target_text;
+  const unit = useProfileNutritionDefault
+    ? fallback.unit
+    : row?.unit ?? fallback.unit;
+  const metadata = goalType === 'nutrition_calories'
+    ? { ...(row?.metadata ?? {}), ...(fallback.metadata ?? {}) }
+    : row?.metadata ?? fallback.metadata ?? {};
+  const source = useProfileNutritionDefault
+    ? fallback.source
+    : row?.source ?? fallback.source;
 
   return {
     goal_type: goalType,
     target_value: targetValue,
     target_text: targetText,
     unit,
-    source: row?.source ?? fallback.source,
-    metadata: row?.metadata ?? fallback.metadata ?? {},
+    source,
+    metadata,
     display_value: displayGoalValue(goalType, targetValue, targetText, unit),
     created_at: row?.created_at ?? null,
     updated_at: row?.updated_at ?? null,
@@ -397,10 +421,13 @@ function buildFallbackGoals({ profile, legacyOnboarding, preferences, latestActi
     : normalizeText(profile?.wellness_goal) ??
       normalizeText(preferences?.primary_goal) ??
       GOAL_DEFAULTS.wellness.target_text;
-  const defaultNutritionCalories = defaultNutritionCaloriesFromBmi(
+  const defaultNutritionCalories = defaultNutritionCaloriesFromProfile(
     profile,
     legacyOnboarding
   );
+  const nutritionMetadata = defaultNutritionCalories == null
+    ? {}
+    : calorieGoalMetadata(defaultNutritionCalories);
 
   return {
     wellness: {
@@ -444,7 +471,7 @@ function buildFallbackGoals({ profile, legacyOnboarding, preferences, latestActi
       target_value:
         defaultNutritionCalories ?? GOAL_DEFAULTS.nutrition_calories.target_value,
       source: defaultNutritionCalories == null ? 'default' : 'system_default',
-      metadata: {},
+      metadata: nutritionMetadata,
     },
   };
 }
@@ -461,19 +488,31 @@ async function ensureUserExists(client, userId) {
 async function readGoalContext(client, userId) {
   const profileResult = await client.query(
     `SELECT
-       wellness_goal,
-       wellness_goals,
-       lifestyle_type,
-       exercise_goal_days,
-       bmi,
-       to_char(usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
-       to_char(usual_wake_time, 'HH24:MI') AS usual_wake_time
-     FROM user_onboarding_profiles
-     WHERE user_id = $1`,
+       users.age,
+       users.gender,
+       profile.wellness_goal,
+       profile.wellness_goals,
+       profile.lifestyle_type,
+       profile.exercise_goal_days,
+       profile.height_cm,
+       profile.weight_kg,
+       profile.bmi,
+       to_char(profile.usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
+       to_char(profile.usual_wake_time, 'HH24:MI') AS usual_wake_time
+     FROM users
+     LEFT JOIN user_onboarding_profiles profile
+       ON profile.user_id = users.user_id
+     WHERE users.user_id = $1`,
     [userId]
   );
   const legacyOnboardingResult = await client.query(
-    `SELECT sleep_hours, exercise_days_per_week, activity_level, bmi
+    `SELECT
+       sleep_hours,
+       exercise_days_per_week,
+       activity_level,
+       height_cm,
+       weight_kg,
+       bmi
      FROM user_onboarding
      WHERE user_id = $1`,
     [userId]

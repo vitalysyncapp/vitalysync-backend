@@ -8,73 +8,178 @@ const NUTRITION_CALORIE_GOAL_TYPE = 'nutrition_calories';
 const NUTRITION_CALORIE_GOAL_UNIT = 'kcal';
 const NUTRITION_CALORIE_GOAL_SOURCE = 'system_default';
 
-// WHO adult BMI boundaries: <18.5, 18.5-24.9, 25-29.9,
-// 30-34.9, 35-39.9, and 40+. These classifications stay internal.
-const WHO_ADULT_BMI_THRESHOLDS = Object.freeze({
-  REFERENCE_MIN: 18.5,
-  PRE_OBESITY_MIN: 25,
-  OBESITY_CLASS_I_MIN: 30,
-  OBESITY_CLASS_II_MIN: 35,
-  OBESITY_CLASS_III_MIN: 40,
+// WHO adult BMI reference range is 18.5-24.9. The kcal estimator uses
+// FAO/WHO/UNU-style age/sex/weight BMR equations scaled by profile activity.
+const WHO_ADULT_REFERENCE_BMI = Object.freeze({
+  MIN: 18.5,
+  MAX: 24.9,
 });
 
-const BMI_CLASSIFICATIONS = Object.freeze({
-  UNDERWEIGHT: 'underweight',
-  REFERENCE: 'reference',
-  PRE_OBESITY: 'pre_obesity',
-  OBESITY_CLASS_I: 'obesity_class_i',
-  OBESITY_CLASS_II: 'obesity_class_ii',
-  OBESITY_CLASS_III: 'obesity_class_iii',
-});
+const MIN_ADULT_BMI_AGE = 18;
+const DEFAULT_PROFILE_AGE = 30;
+const DEFAULT_PROFILE_GENDER = 'Other';
+const DEFAULT_LIFESTYLE_TYPE = 'Lightly Active';
+const CALORIE_GOAL_MIN = 800;
+const CALORIE_GOAL_MAX = 6000;
 
-// Product initialization values only; they are not clinical intake advice.
-const DEFAULT_CALORIE_GOALS_KCAL = Object.freeze({
-  [BMI_CLASSIFICATIONS.UNDERWEIGHT]: 2200,
-  [BMI_CLASSIFICATIONS.REFERENCE]: 2000,
-  [BMI_CLASSIFICATIONS.PRE_OBESITY]: 1900,
-  [BMI_CLASSIFICATIONS.OBESITY_CLASS_I]: 1800,
-  [BMI_CLASSIFICATIONS.OBESITY_CLASS_II]: 1700,
-  [BMI_CLASSIFICATIONS.OBESITY_CLASS_III]: 1600,
+const PROFILE_ACTIVITY_LEVELS = Object.freeze({
+  sedentary: 1.4,
+  'lightly active': 1.55,
+  'moderately active': 1.7,
+  active: 1.85,
+  'very active': 2.0,
 });
 
 let openaiClient = null;
 
-function classifyStoredBmi(bmi) {
-  if (bmi < WHO_ADULT_BMI_THRESHOLDS.REFERENCE_MIN) {
-    return BMI_CLASSIFICATIONS.UNDERWEIGHT;
+function normalizedNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function requirePositiveNumber(value, fieldName) {
+  const parsed = normalizedNumber(value);
+  if (parsed == null || parsed <= 0) {
+    throw new TypeError(`Valid ${fieldName} is required`);
   }
 
-  if (bmi < WHO_ADULT_BMI_THRESHOLDS.PRE_OBESITY_MIN) {
-    return BMI_CLASSIFICATIONS.REFERENCE;
+  return parsed;
+}
+
+function normalizeProfileAge(age) {
+  const parsed = Number.parseInt(String(age ?? ''), 10);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 120
+    ? parsed
+    : DEFAULT_PROFILE_AGE;
+}
+
+function normalizeProfileGender(gender) {
+  const normalized = String(gender ?? '').trim();
+  return normalized === 'Male' || normalized === 'Female'
+    ? normalized
+    : DEFAULT_PROFILE_GENDER;
+}
+
+function profileActivityLevel(lifestyleType) {
+  const normalized = String(lifestyleType ?? DEFAULT_LIFESTYLE_TYPE)
+    .trim()
+    .toLowerCase();
+  return PROFILE_ACTIVITY_LEVELS[normalized] ?? PROFILE_ACTIVITY_LEVELS[
+    DEFAULT_LIFESTYLE_TYPE.toLowerCase()
+  ];
+}
+
+function calculateStoredBmi({ heightCm, weightKg, storedBmi }) {
+  const parsedBmi = normalizedNumber(storedBmi);
+  if (parsedBmi != null && parsedBmi > 0) {
+    return parsedBmi;
   }
 
-  if (bmi < WHO_ADULT_BMI_THRESHOLDS.OBESITY_CLASS_I_MIN) {
-    return BMI_CLASSIFICATIONS.PRE_OBESITY;
+  const heightM = heightCm / 100;
+  return weightKg / (heightM * heightM);
+}
+
+function balancedWeightKg({ age, heightCm, weightKg, bmi }) {
+  if (age < MIN_ADULT_BMI_AGE) {
+    return weightKg;
   }
 
-  if (bmi < WHO_ADULT_BMI_THRESHOLDS.OBESITY_CLASS_II_MIN) {
-    return BMI_CLASSIFICATIONS.OBESITY_CLASS_I;
+  const heightM = heightCm / 100;
+  const referenceBmi = Math.min(
+    WHO_ADULT_REFERENCE_BMI.MAX,
+    Math.max(WHO_ADULT_REFERENCE_BMI.MIN, bmi)
+  );
+  const referenceWeightKg = referenceBmi * heightM * heightM;
+
+  return (referenceWeightKg * 0.7) + (weightKg * 0.3);
+}
+
+function basalMetabolicRate({ age, gender, weightKg }) {
+  if (gender === 'Male') {
+    return maleBasalMetabolicRate(age, weightKg);
   }
 
-  if (bmi < WHO_ADULT_BMI_THRESHOLDS.OBESITY_CLASS_III_MIN) {
-    return BMI_CLASSIFICATIONS.OBESITY_CLASS_II;
+  if (gender === 'Female') {
+    return femaleBasalMetabolicRate(age, weightKg);
   }
 
-  return BMI_CLASSIFICATIONS.OBESITY_CLASS_III;
+  return (
+    maleBasalMetabolicRate(age, weightKg) +
+    femaleBasalMetabolicRate(age, weightKg)
+  ) / 2;
+}
+
+function maleBasalMetabolicRate(age, weightKg) {
+  if (age < 3) return (59.512 * weightKg) - 30.4;
+  if (age < 10) return (22.706 * weightKg) + 504.3;
+  if (age < 18) return (17.686 * weightKg) + 658.2;
+  if (age < 30) return (15.057 * weightKg) + 692.2;
+  if (age < 60) return (11.472 * weightKg) + 873.1;
+  return (11.711 * weightKg) + 587.7;
+}
+
+function femaleBasalMetabolicRate(age, weightKg) {
+  if (age < 3) return (58.317 * weightKg) - 31.1;
+  if (age < 10) return (20.315 * weightKg) + 485.9;
+  if (age < 18) return (13.384 * weightKg) + 692.6;
+  if (age < 30) return (14.818 * weightKg) + 486.6;
+  if (age < 60) return (8.126 * weightKg) + 845.6;
+  return (9.082 * weightKg) + 658.5;
+}
+
+function roundCalorieGoal(value) {
+  const rounded = Math.round(value / 50) * 50;
+  return Math.min(CALORIE_GOAL_MAX, Math.max(CALORIE_GOAL_MIN, rounded));
+}
+
+export function calorieGoalMetadata(targetValue) {
+  return {
+    balanced_kcal: targetValue,
+    balanced_kcal_source: 'wellness_profile',
+    calculation_basis: 'age_height_weight_bmi_lifestyle',
+  };
+}
+
+export function defaultCalorieGoalForProfile(profile = {}) {
+  const age = normalizeProfileAge(profile.age);
+  const gender = normalizeProfileGender(profile.gender);
+  const heightCm = requirePositiveNumber(
+    profile.height_cm ?? profile.heightCm,
+    'height_cm'
+  );
+  const weightKg = requirePositiveNumber(
+    profile.weight_kg ?? profile.weightKg,
+    'weight_kg'
+  );
+  const bmi = calculateStoredBmi({
+    heightCm,
+    weightKg,
+    storedBmi: profile.bmi,
+  });
+  const bmrWeightKg = balancedWeightKg({ age, heightCm, weightKg, bmi });
+  const bmr = basalMetabolicRate({ age, gender, weightKg: bmrWeightKg });
+  const activityLevel = profileActivityLevel(
+    profile.lifestyle_type ?? profile.activity_level ?? profile.lifestyleType
+  );
+
+  return roundCalorieGoal(bmr * activityLevel);
 }
 
 export function defaultCalorieGoalForStoredBmi(storedBmi) {
-  const bmi = Number(storedBmi);
-  if (!Number.isFinite(bmi) || bmi <= 0) {
-    throw new TypeError('Valid stored BMI is required');
-  }
+  const bmi = requirePositiveNumber(storedBmi, 'stored BMI');
 
-  return DEFAULT_CALORIE_GOALS_KCAL[classifyStoredBmi(bmi)];
+  if (bmi < WHO_ADULT_REFERENCE_BMI.MIN) return 2200;
+  if (bmi < 25) return 2000;
+  if (bmi < 30) return 1900;
+  if (bmi < 35) return 1800;
+  if (bmi < 40) return 1700;
+  return 1600;
 }
 
 export async function ensureDefaultNutritionCalorieGoal({
   client,
   userId,
+  profile,
   storedBmi,
 }) {
   const normalizedUserId = Number(userId);
@@ -86,7 +191,10 @@ export async function ensureDefaultNutritionCalorieGoal({
     throw new TypeError('Database client is required');
   }
 
-  const targetValue = defaultCalorieGoalForStoredBmi(storedBmi);
+  const targetValue = profile == null
+    ? defaultCalorieGoalForStoredBmi(storedBmi)
+    : defaultCalorieGoalForProfile(profile);
+  const metadata = calorieGoalMetadata(targetValue);
   const result = await client.query(
     `INSERT INTO user_goals (
        user_id,
@@ -97,7 +205,7 @@ export async function ensureDefaultNutritionCalorieGoal({
        source,
        metadata
      )
-     VALUES ($1, $2, $3, NULL, $4, $5, '{}'::jsonb)
+     VALUES ($1, $2, $3, NULL, $4, $5, $6::jsonb)
      ON CONFLICT (user_id, goal_type)
      DO UPDATE SET
        target_value = EXCLUDED.target_value,
@@ -114,6 +222,7 @@ export async function ensureDefaultNutritionCalorieGoal({
       targetValue,
       NUTRITION_CALORIE_GOAL_UNIT,
       NUTRITION_CALORIE_GOAL_SOURCE,
+      JSON.stringify(metadata),
     ]
   );
 

@@ -105,7 +105,7 @@ test('goals reserve system-generated provenance for backend writes', () => {
   assert.equal(goals[0].source, 'user');
 });
 
-test('goals derive fallback nutrition calories from stored BMI', async () => {
+test('goals derive fallback nutrition calories from wellness profile', async () => {
   const originalConnect = pool.connect;
   const fakeClient = {
     async query(text) {
@@ -113,15 +113,19 @@ test('goals derive fallback nutrition calories from stored BMI', async () => {
         return { rowCount: 1, rows: [{ user_id: 1 }] };
       }
 
-      if (text.includes('FROM user_onboarding_profiles')) {
+      if (text.includes('LEFT JOIN user_onboarding_profiles')) {
         return {
           rowCount: 1,
           rows: [
             {
+              age: 30,
+              gender: 'Female',
               wellness_goal: 'Improve sleep',
               wellness_goals: ['Improve sleep'],
               lifestyle_type: 'Sedentary',
               exercise_goal_days: '3-4 days',
+              height_cm: '160',
+              weight_kg: '80',
               bmi: '31.3',
               usual_sleep_time: '22:00',
               usual_wake_time: '06:00',
@@ -157,15 +161,16 @@ test('goals derive fallback nutrition calories from stored BMI', async () => {
     const result = await getUserGoals(1);
     const nutritionGoal = result.goals.nutrition_calories;
 
-    assert.equal(nutritionGoal.target_value, 1800);
+    assert.equal(nutritionGoal.target_value, 1950);
     assert.equal(nutritionGoal.source, 'system_default');
-    assert.equal(nutritionGoal.display_value, '1,800 kcal');
+    assert.equal(nutritionGoal.display_value, '1,950 kcal');
+    assert.equal(nutritionGoal.metadata.balanced_kcal, 1950);
   } finally {
     pool.connect = originalConnect;
   }
 });
 
-test('goals keep manually saved nutrition calories over BMI fallback', async () => {
+test('goals refresh saved system nutrition calories from wellness profile', async () => {
   const originalConnect = pool.connect;
   const fakeClient = {
     async query(text) {
@@ -173,15 +178,95 @@ test('goals keep manually saved nutrition calories over BMI fallback', async () 
         return { rowCount: 1, rows: [{ user_id: 1 }] };
       }
 
-      if (text.includes('FROM user_onboarding_profiles')) {
+      if (text.includes('LEFT JOIN user_onboarding_profiles')) {
         return {
           rowCount: 1,
           rows: [
             {
+              age: 30,
+              gender: 'Female',
               wellness_goal: 'Improve sleep',
               wellness_goals: ['Improve sleep'],
               lifestyle_type: 'Sedentary',
               exercise_goal_days: '3-4 days',
+              height_cm: '160',
+              weight_kg: '80',
+              bmi: '31.3',
+              usual_sleep_time: '22:00',
+              usual_wake_time: '06:00',
+            },
+          ],
+        };
+      }
+
+      if (text.includes('FROM user_onboarding')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('FROM user_preferences')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('FROM daily_activity_logs')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('FROM user_goals')) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              goal_type: 'nutrition_calories',
+              target_value: 1800,
+              target_text: null,
+              unit: 'kcal',
+              source: 'system_default',
+              metadata: { balanced_kcal: 1800 },
+            },
+          ],
+        };
+      }
+
+      throw new Error(`Unexpected query: ${text}`);
+    },
+    release() {},
+  };
+
+  pool.connect = async () => fakeClient;
+
+  try {
+    const result = await getUserGoals(1);
+    const nutritionGoal = result.goals.nutrition_calories;
+
+    assert.equal(nutritionGoal.target_value, 1950);
+    assert.equal(nutritionGoal.source, 'system_default');
+    assert.equal(nutritionGoal.metadata.balanced_kcal, 1950);
+  } finally {
+    pool.connect = originalConnect;
+  }
+});
+
+test('goals keep manually saved nutrition calories over profile fallback', async () => {
+  const originalConnect = pool.connect;
+  const fakeClient = {
+    async query(text) {
+      if (text.includes('SELECT user_id FROM users')) {
+        return { rowCount: 1, rows: [{ user_id: 1 }] };
+      }
+
+      if (text.includes('LEFT JOIN user_onboarding_profiles')) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              age: 30,
+              gender: 'Female',
+              wellness_goal: 'Improve sleep',
+              wellness_goals: ['Improve sleep'],
+              lifestyle_type: 'Sedentary',
+              exercise_goal_days: '3-4 days',
+              height_cm: '160',
+              weight_kg: '80',
               bmi: '31.3',
               usual_sleep_time: '22:00',
               usual_wake_time: '06:00',
@@ -231,6 +316,7 @@ test('goals keep manually saved nutrition calories over BMI fallback', async () 
 
     assert.equal(nutritionGoal.target_value, 2400);
     assert.equal(nutritionGoal.source, 'user');
+    assert.equal(nutritionGoal.metadata.balanced_kcal, 1950);
   } finally {
     pool.connect = originalConnect;
   }

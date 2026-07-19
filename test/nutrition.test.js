@@ -7,6 +7,7 @@ import {
 } from '../src/controllers/nutrition.controller.js';
 import {
   calculateTotals,
+  defaultCalorieGoalForProfile,
   defaultCalorieGoalForStoredBmi,
   ensureDefaultNutritionCalorieGoal,
   isValidDateString,
@@ -65,20 +66,36 @@ test('nutrition totals sum calories and macros safely', () => {
   });
 });
 
-test('default calorie goals use stored BMI across WHO adult boundaries', () => {
-  assert.equal(defaultCalorieGoalForStoredBmi(18.4), 2200);
-  assert.equal(defaultCalorieGoalForStoredBmi(18.5), 2000);
-  assert.equal(defaultCalorieGoalForStoredBmi(24.9), 2000);
-  assert.equal(defaultCalorieGoalForStoredBmi(25), 1900);
+test('default calorie goals use wellness profile energy inputs', () => {
+  const profile = {
+    age: 30,
+    gender: 'Female',
+    height_cm: 160,
+    weight_kg: 60,
+    bmi: 23.4,
+    lifestyle_type: 'Sedentary',
+  };
+
+  assert.equal(defaultCalorieGoalForProfile(profile), 1850);
+  assert.equal(
+    defaultCalorieGoalForProfile({ ...profile, age: 60 }),
+    1700
+  );
+  assert.equal(
+    defaultCalorieGoalForProfile({ ...profile, lifestyle_type: 'Very Active' }),
+    2650
+  );
+  assert.equal(
+    defaultCalorieGoalForProfile({ ...profile, weight_kg: 80, bmi: 31.3 }),
+    1950
+  );
   assert.equal(defaultCalorieGoalForStoredBmi(30), 1800);
-  assert.equal(defaultCalorieGoalForStoredBmi(35), 1700);
-  assert.equal(defaultCalorieGoalForStoredBmi(40), 1600);
 });
 
-test('default calorie goals require a valid stored BMI', () => {
+test('default calorie goals require valid body metrics', () => {
   assert.throws(
-    () => defaultCalorieGoalForStoredBmi(null),
-    /Valid stored BMI is required/
+    () => defaultCalorieGoalForProfile({ age: 30, height_cm: 170 }),
+    /Valid weight_kg is required/
   );
 });
 
@@ -94,18 +111,30 @@ test('default calorie goal persistence refreshes only system-generated goals', a
   const created = await ensureDefaultNutritionCalorieGoal({
     client,
     userId: 7,
-    storedBmi: '30',
+    profile: {
+      age: 30,
+      gender: 'Female',
+      height_cm: 160,
+      weight_kg: 80,
+      bmi: '31.3',
+      lifestyle_type: 'Sedentary',
+    },
   });
 
   assert.equal(created, false);
   assert.equal(queries.length, 1);
-  assert.deepEqual(queries[0].values, [
+  assert.deepEqual(queries[0].values.slice(0, 5), [
     7,
     'nutrition_calories',
-    1800,
+    1950,
     'kcal',
     'system_default',
   ]);
+  assert.deepEqual(JSON.parse(queries[0].values[5]), {
+    balanced_kcal: 1950,
+    balanced_kcal_source: 'wellness_profile',
+    calculation_basis: 'age_height_weight_bmi_lifestyle',
+  });
   assert.match(queries[0].text, /ON CONFLICT \(user_id, goal_type\)/);
   assert.match(queries[0].text, /DO UPDATE SET/);
   assert.match(
