@@ -4,6 +4,7 @@ import {
   OnboardingServiceError,
   getOnboardingStatus as fetchRequiredOnboardingStatus,
   getOnboardingSummaryBundle,
+  normalizeBodyMetrics,
   submitRequiredOnboarding,
   updateUserBurnoutBaseline,
   updateUserWellnessProfile
@@ -161,6 +162,9 @@ async function fetchOnboardingBundle(userId) {
        exercise_days_per_week,
        meal_regularness,
        stress_level,
+       height_cm,
+       weight_kg,
+       bmi,
        mental_drain_level,
        focus_difficulty_level,
        overwhelm_level,
@@ -355,6 +359,8 @@ export async function createOnboarding(req, res) {
   }
 
   try {
+    const bodyMetrics = normalizeBodyMetrics(req.body, { required: false });
+
     if (!(await userExists(userId))) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -374,9 +380,13 @@ export async function createOnboarding(req, res) {
          overwhelm_level,
          recovery_level,
          motivation_level,
+         height_cm,
+         weight_kg,
+         bmi,
          skipped
        ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+         $11, $12, $13, $14, $15, $16, $17
        )
        RETURNING *`,
       [
@@ -393,6 +403,9 @@ export async function createOnboarding(req, res) {
         parseBoundedNumber(overwhelm_level, 1, 5),
         parseBoundedNumber(recovery_level, 1, 5),
         parseBoundedNumber(motivation_level, 1, 5),
+        bodyMetrics.height_cm,
+        bodyMetrics.weight_kg,
+        bodyMetrics.bmi,
         Boolean(skipped)
       ]
     );
@@ -402,6 +415,10 @@ export async function createOnboarding(req, res) {
       onboarding: result.rows[0]
     });
   } catch (error) {
+    if (error instanceof OnboardingServiceError) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+
     if (error.code === '23505') {
       return res.status(409).json({ message: 'Onboarding already exists for this user' });
     }
@@ -446,6 +463,8 @@ export async function updateOnboarding(req, res) {
   }
 
   try {
+    const bodyMetrics = normalizeBodyMetrics(req.body, { required: false });
+
     if (!(await userExists(userId))) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -465,9 +484,13 @@ export async function updateOnboarding(req, res) {
          overwhelm_level,
          recovery_level,
          motivation_level,
+         height_cm,
+         weight_kg,
+         bmi,
          skipped
        ) VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+         $11, $12, $13, $14, $15, $16, $17
        )
        ON CONFLICT (user_id) DO UPDATE SET
          role_type = EXCLUDED.role_type,
@@ -482,6 +505,9 @@ export async function updateOnboarding(req, res) {
          overwhelm_level = EXCLUDED.overwhelm_level,
          recovery_level = EXCLUDED.recovery_level,
          motivation_level = EXCLUDED.motivation_level,
+         height_cm = COALESCE(EXCLUDED.height_cm, user_onboarding.height_cm),
+         weight_kg = COALESCE(EXCLUDED.weight_kg, user_onboarding.weight_kg),
+         bmi = COALESCE(EXCLUDED.bmi, user_onboarding.bmi),
          skipped = EXCLUDED.skipped,
          updated_at = NOW()
        RETURNING *`,
@@ -499,6 +525,9 @@ export async function updateOnboarding(req, res) {
         parseBoundedNumber(overwhelm_level, 1, 5),
         parseBoundedNumber(recovery_level, 1, 5),
         parseBoundedNumber(motivation_level, 1, 5),
+        bodyMetrics.height_cm,
+        bodyMetrics.weight_kg,
+        bodyMetrics.bmi,
         Boolean(skipped)
       ]
     );
@@ -508,6 +537,10 @@ export async function updateOnboarding(req, res) {
       onboarding: result.rows[0]
     });
   } catch (error) {
+    if (error instanceof OnboardingServiceError) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+
     console.error('Update onboarding error:', error);
     return res.status(500).json({ message: 'Failed to update onboarding data' });
   }

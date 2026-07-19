@@ -4,8 +4,121 @@ import OpenAI from 'openai';
 const ALLOWED_MEAL_TYPES = new Set(['breakfast', 'lunch', 'dinner', 'snack']);
 const USDA_SEARCH_URL = 'https://api.nal.usda.gov/fdc/v1/foods/search';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+const NUTRITION_CALORIE_GOAL_TYPE = 'nutrition_calories';
+const NUTRITION_CALORIE_GOAL_UNIT = 'kcal';
+const NUTRITION_CALORIE_GOAL_SOURCE = 'system_default';
+
+// WHO adult BMI boundaries: <18.5, 18.5-24.9, 25-29.9,
+// 30-34.9, 35-39.9, and 40+. These classifications stay internal.
+const WHO_ADULT_BMI_THRESHOLDS = Object.freeze({
+  REFERENCE_MIN: 18.5,
+  PRE_OBESITY_MIN: 25,
+  OBESITY_CLASS_I_MIN: 30,
+  OBESITY_CLASS_II_MIN: 35,
+  OBESITY_CLASS_III_MIN: 40,
+});
+
+const BMI_CLASSIFICATIONS = Object.freeze({
+  UNDERWEIGHT: 'underweight',
+  REFERENCE: 'reference',
+  PRE_OBESITY: 'pre_obesity',
+  OBESITY_CLASS_I: 'obesity_class_i',
+  OBESITY_CLASS_II: 'obesity_class_ii',
+  OBESITY_CLASS_III: 'obesity_class_iii',
+});
+
+// Product initialization values only; they are not clinical intake advice.
+const DEFAULT_CALORIE_GOALS_KCAL = Object.freeze({
+  [BMI_CLASSIFICATIONS.UNDERWEIGHT]: 2200,
+  [BMI_CLASSIFICATIONS.REFERENCE]: 2000,
+  [BMI_CLASSIFICATIONS.PRE_OBESITY]: 1900,
+  [BMI_CLASSIFICATIONS.OBESITY_CLASS_I]: 1800,
+  [BMI_CLASSIFICATIONS.OBESITY_CLASS_II]: 1700,
+  [BMI_CLASSIFICATIONS.OBESITY_CLASS_III]: 1600,
+});
 
 let openaiClient = null;
+
+function classifyStoredBmi(bmi) {
+  if (bmi < WHO_ADULT_BMI_THRESHOLDS.REFERENCE_MIN) {
+    return BMI_CLASSIFICATIONS.UNDERWEIGHT;
+  }
+
+  if (bmi < WHO_ADULT_BMI_THRESHOLDS.PRE_OBESITY_MIN) {
+    return BMI_CLASSIFICATIONS.REFERENCE;
+  }
+
+  if (bmi < WHO_ADULT_BMI_THRESHOLDS.OBESITY_CLASS_I_MIN) {
+    return BMI_CLASSIFICATIONS.PRE_OBESITY;
+  }
+
+  if (bmi < WHO_ADULT_BMI_THRESHOLDS.OBESITY_CLASS_II_MIN) {
+    return BMI_CLASSIFICATIONS.OBESITY_CLASS_I;
+  }
+
+  if (bmi < WHO_ADULT_BMI_THRESHOLDS.OBESITY_CLASS_III_MIN) {
+    return BMI_CLASSIFICATIONS.OBESITY_CLASS_II;
+  }
+
+  return BMI_CLASSIFICATIONS.OBESITY_CLASS_III;
+}
+
+export function defaultCalorieGoalForStoredBmi(storedBmi) {
+  const bmi = Number(storedBmi);
+  if (!Number.isFinite(bmi) || bmi <= 0) {
+    throw new TypeError('Valid stored BMI is required');
+  }
+
+  return DEFAULT_CALORIE_GOALS_KCAL[classifyStoredBmi(bmi)];
+}
+
+export async function ensureDefaultNutritionCalorieGoal({
+  client,
+  userId,
+  storedBmi,
+}) {
+  const normalizedUserId = Number(userId);
+  if (!Number.isInteger(normalizedUserId) || normalizedUserId <= 0) {
+    throw new TypeError('Valid user_id is required');
+  }
+
+  if (!client || typeof client.query !== 'function') {
+    throw new TypeError('Database client is required');
+  }
+
+  const targetValue = defaultCalorieGoalForStoredBmi(storedBmi);
+  const result = await client.query(
+    `INSERT INTO user_goals (
+       user_id,
+       goal_type,
+       target_value,
+       target_text,
+       unit,
+       source,
+       metadata
+     )
+     VALUES ($1, $2, $3, NULL, $4, $5, '{}'::jsonb)
+     ON CONFLICT (user_id, goal_type)
+     DO UPDATE SET
+       target_value = EXCLUDED.target_value,
+       target_text = EXCLUDED.target_text,
+       unit = EXCLUDED.unit,
+       source = EXCLUDED.source,
+       metadata = EXCLUDED.metadata,
+       updated_at = NOW()
+     WHERE user_goals.source = EXCLUDED.source
+     RETURNING goal_id`,
+    [
+      normalizedUserId,
+      NUTRITION_CALORIE_GOAL_TYPE,
+      targetValue,
+      NUTRITION_CALORIE_GOAL_UNIT,
+      NUTRITION_CALORIE_GOAL_SOURCE,
+    ]
+  );
+
+  return result.rowCount > 0;
+}
 
 export function isValidMealType(value) {
   return ALLOWED_MEAL_TYPES.has(String(value ?? '').trim().toLowerCase());

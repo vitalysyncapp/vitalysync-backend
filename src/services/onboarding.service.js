@@ -5,6 +5,7 @@ import {
   upsertBurnoutScoresForRange
 } from './burnoutScoringService.js';
 import { addDays, formatDateOnly } from './burnoutScoringEngine.js';
+import { ensureDefaultNutritionCalorieGoal } from './nutrition.service.js';
 
 const ROLE_OPTIONS = new Set([
   'Student',
@@ -43,6 +44,11 @@ const EXERCISE_GOAL_OPTIONS = new Set([
   '3–4 days',
   '5+ days'
 ]);
+
+const HEIGHT_CM_MIN = 100;
+const HEIGHT_CM_MAX = 250;
+const WEIGHT_KG_MIN = 20;
+const WEIGHT_KG_MAX = 500;
 
 const BURNOUT_QUESTIONS = [
   {
@@ -237,6 +243,73 @@ function parseLikert(value, fieldName, { required = true } = {}) {
   return parsed;
 }
 
+function hasMetricValue(value) {
+  return value != null && String(value).trim() !== '';
+}
+
+function parseBodyMetric(value, fieldName, min, max, { required = true } = {}) {
+  if (!hasMetricValue(value)) {
+    if (!required) {
+      return null;
+    }
+
+    throw new OnboardingServiceError(`Valid ${fieldName} is required`);
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new OnboardingServiceError(`${fieldName} must be numeric`);
+  }
+
+  if (parsed < min || parsed > max) {
+    throw new OnboardingServiceError(
+      `${fieldName} must be between ${min} and ${max}`
+    );
+  }
+
+  return Math.round(parsed * 100) / 100;
+}
+
+export function calculateBmi(heightCm, weightKg) {
+  const heightM = Number(heightCm) / 100;
+  const bmi = Number(weightKg) / (heightM * heightM);
+  return Math.round((bmi + Number.EPSILON * bmi) * 10) / 10;
+}
+
+export function normalizeBodyMetrics(source = {}, { required = false } = {}) {
+  const hasHeight = hasMetricValue(source?.height_cm);
+  const hasWeight = hasMetricValue(source?.weight_kg);
+
+  if (!required && !hasHeight && !hasWeight) {
+    return {
+      height_cm: null,
+      weight_kg: null,
+      bmi: null,
+      provided: false
+    };
+  }
+
+  const heightCm = parseBodyMetric(
+    source?.height_cm,
+    'height_cm',
+    HEIGHT_CM_MIN,
+    HEIGHT_CM_MAX
+  );
+  const weightKg = parseBodyMetric(
+    source?.weight_kg,
+    'weight_kg',
+    WEIGHT_KG_MIN,
+    WEIGHT_KG_MAX
+  );
+
+  return {
+    height_cm: heightCm,
+    weight_kg: weightKg,
+    bmi: calculateBmi(heightCm, weightKg),
+    provided: true
+  };
+}
+
 function parseBoolean(value, fieldName) {
   if (typeof value === 'boolean') {
     return value;
@@ -276,6 +349,10 @@ function normalizeProfile(profile = {}) {
   const extraResponsibilityLevel = hasExtraResponsibilities
     ? parseLikert(profile.extra_responsibility_level, 'extra_responsibility_level')
     : null;
+  const { provided: _metricsProvided, ...bodyMetrics } = normalizeBodyMetrics(
+    profile,
+    { required: true }
+  );
 
   if (!ROLE_OPTIONS.has(role)) {
     throw new OnboardingServiceError('Invalid role value');
@@ -311,7 +388,8 @@ function normalizeProfile(profile = {}) {
     exercise_goal_days: exerciseGoalDays,
     workload_level: parseLikert(profile.workload_level, 'workload_level'),
     has_extra_responsibilities: hasExtraResponsibilities,
-    extra_responsibility_level: extraResponsibilityLevel
+    extra_responsibility_level: extraResponsibilityLevel,
+    ...bodyMetrics
   };
 }
 
@@ -336,6 +414,34 @@ function buildBurnoutAnswerRecords(burnoutAnswers) {
       numeric_value: numericValue
     };
   });
+}
+
+function buildBodyMetricAnswerRecords(profile) {
+  return [
+    {
+      question_key: 'height_cm',
+      question_text: 'What is your height in centimeters?',
+      category: 'user_context',
+      answer_value: String(profile.height_cm),
+      numeric_value: null,
+      is_reverse_scored: false
+    },
+    {
+      question_key: 'weight_kg',
+      question_text: 'What is your weight in kilograms?',
+      category: 'user_context',
+      answer_value: String(profile.weight_kg),
+      numeric_value: null,
+      is_reverse_scored: false
+    }
+  ];
+}
+
+function hasCompleteBodyMetrics(profile) {
+  return (
+    hasMetricValue(profile?.height_cm) &&
+    hasMetricValue(profile?.weight_kg)
+  );
 }
 
 function buildProfileAnswerRecords(profile) {
@@ -364,6 +470,7 @@ function buildProfileAnswerRecords(profile) {
       numeric_value: null,
       is_reverse_scored: false
     },
+    ...buildBodyMetricAnswerRecords(profile),
     {
       question_key: 'usual_sleep_time',
       question_text: 'What time do you usually sleep?',
@@ -581,11 +688,14 @@ export async function submitRequiredOnboarding(payload) {
          personal_accomplishment_score,
          initial_burnout_score,
          initial_burnout_level,
-         wellness_goals
+         wellness_goals,
+         height_cm,
+         weight_kg,
+         bmi
        )
        VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-         $11, $12, $13, $14, $15, $16
+         $11, $12, $13, $14, $15, $16, $17, $18, $19
        )
        ON CONFLICT (user_id)
        DO UPDATE SET
@@ -593,6 +703,9 @@ export async function submitRequiredOnboarding(payload) {
          lifestyle_type = EXCLUDED.lifestyle_type,
          wellness_goal = EXCLUDED.wellness_goal,
          wellness_goals = EXCLUDED.wellness_goals,
+         height_cm = EXCLUDED.height_cm,
+         weight_kg = EXCLUDED.weight_kg,
+         bmi = EXCLUDED.bmi,
          usual_sleep_time = EXCLUDED.usual_sleep_time,
          usual_wake_time = EXCLUDED.usual_wake_time,
          exercise_goal_days = EXCLUDED.exercise_goal_days,
@@ -622,9 +735,20 @@ export async function submitRequiredOnboarding(payload) {
         scores.personal_accomplishment_score,
         scores.initial_burnout_score,
         scores.initial_burnout_level,
-        profile.wellness_goals
+        profile.wellness_goals,
+        profile.height_cm,
+        profile.weight_kg,
+        profile.bmi
       ]
     );
+
+    const savedProfile = profileResult.rows[0];
+
+    await ensureDefaultNutritionCalorieGoal({
+      client,
+      userId,
+      storedBmi: savedProfile.bmi
+    });
 
     await insertAnswerRecords(client, userId, answerRecords);
 
@@ -709,9 +833,12 @@ export async function submitRequiredOnboarding(payload) {
          activity_level,
          exercise_days_per_week,
          stress_level,
+         height_cm,
+         weight_kg,
+         bmi,
          skipped
        )
-       VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE)
        ON CONFLICT (user_id)
        DO UPDATE SET
          role_type = EXCLUDED.role_type,
@@ -719,6 +846,9 @@ export async function submitRequiredOnboarding(payload) {
          activity_level = EXCLUDED.activity_level,
          exercise_days_per_week = EXCLUDED.exercise_days_per_week,
          stress_level = EXCLUDED.stress_level,
+         height_cm = EXCLUDED.height_cm,
+         weight_kg = EXCLUDED.weight_kg,
+         bmi = EXCLUDED.bmi,
          skipped = FALSE,
          updated_at = NOW()`,
       [
@@ -727,13 +857,14 @@ export async function submitRequiredOnboarding(payload) {
         sleepHoursBetween(profile.usual_sleep_time, profile.usual_wake_time),
         activityLevelForLegacy(profile.lifestyle_type),
         exerciseDaysForLegacy(profile.exercise_goal_days),
-        profile.workload_level
+        profile.workload_level,
+        profile.height_cm,
+        profile.weight_kg,
+        profile.bmi
       ]
     );
 
     await client.query('COMMIT');
-
-    const savedProfile = profileResult.rows[0];
 
     return {
       message: 'Onboarding submitted successfully',
@@ -786,6 +917,9 @@ export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
          lifestyle_type,
          wellness_goal,
          wellness_goals,
+         height_cm,
+         weight_kg,
+         bmi,
          to_char(usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
          to_char(usual_wake_time, 'HH24:MI') AS usual_wake_time,
          exercise_goal_days,
@@ -889,6 +1023,9 @@ export async function getOnboardingSummaryBundle(userIdValue) {
        lifestyle_type,
        wellness_goal,
        wellness_goals,
+       height_cm,
+       weight_kg,
+       bmi,
        to_char(usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
        to_char(usual_wake_time, 'HH24:MI') AS usual_wake_time,
        exercise_goal_days,
@@ -962,6 +1099,9 @@ export async function getUserProfileSummary(userIdValue) {
        users.onboarding_completed,
        users.onboarding_completed_at,
        profile.id AS onboarding_profile_id,
+       profile.height_cm,
+       profile.weight_kg,
+       profile.bmi,
        to_char(profile.usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
        to_char(profile.usual_wake_time, 'HH24:MI') AS usual_wake_time,
        profile.exercise_goal_days,
@@ -997,6 +1137,9 @@ export async function getUserProfileSummary(userIdValue) {
         lifestyle_type: row.lifestyle_type,
         wellness_goal: row.wellness_goal,
         wellness_goals: normalizeStringList(row.wellness_goals),
+        height_cm: row.height_cm,
+        weight_kg: row.weight_kg,
+        bmi: row.bmi,
         usual_sleep_time: row.usual_sleep_time,
         usual_wake_time: row.usual_wake_time,
         exercise_goal_days: row.exercise_goal_days,
@@ -1042,6 +1185,9 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
     payload.workload_level == null || payload.workload_level === ''
       ? workloadLevelFromIntensity(payload.work_intensity)
       : parseLikert(payload.workload_level, 'workload_level');
+  const hasHeightUpdate = hasMetricValue(payload.height_cm);
+  const hasWeightUpdate = hasMetricValue(payload.weight_kg);
+  const hasBodyMetricsUpdate = hasHeightUpdate || hasWeightUpdate;
 
   if (!ROLE_OPTIONS.has(role)) {
     throw new OnboardingServiceError('Invalid role value');
@@ -1084,6 +1230,9 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
       `SELECT
          wellness_goal,
          wellness_goals,
+         height_cm,
+         weight_kg,
+         bmi,
          exercise_goal_days,
          has_extra_responsibilities,
          extra_responsibility_level,
@@ -1113,6 +1262,40 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
         : userWellnessGoals.length > 0
         ? userWellnessGoals
         : normalizeStringList(wellnessGoal);
+    const existingBodyMetrics = {
+      height_cm: existingProfile.height_cm ?? null,
+      weight_kg: existingProfile.weight_kg ?? null,
+      bmi: existingProfile.bmi ?? null
+    };
+    let bodyMetricsChanged = false;
+    let profileBodyMetrics = existingBodyMetrics;
+
+    if (hasBodyMetricsUpdate) {
+      const nextHeightCm = parseBodyMetric(
+        hasHeightUpdate ? payload.height_cm : existingBodyMetrics.height_cm,
+        'height_cm',
+        HEIGHT_CM_MIN,
+        HEIGHT_CM_MAX
+      );
+      const nextWeightKg = parseBodyMetric(
+        hasWeightUpdate ? payload.weight_kg : existingBodyMetrics.weight_kg,
+        'weight_kg',
+        WEIGHT_KG_MIN,
+        WEIGHT_KG_MAX
+      );
+      bodyMetricsChanged =
+        nextHeightCm !== Number(existingBodyMetrics.height_cm) ||
+        nextWeightKg !== Number(existingBodyMetrics.weight_kg) ||
+        !hasMetricValue(existingBodyMetrics.bmi);
+
+      if (bodyMetricsChanged) {
+        profileBodyMetrics = {
+          height_cm: nextHeightCm,
+          weight_kg: nextWeightKg,
+          bmi: calculateBmi(nextHeightCm, nextWeightKg)
+        };
+      }
+    }
 
     const profileResult = await client.query(
       `INSERT INTO user_onboarding_profiles (
@@ -1131,16 +1314,22 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
          personal_accomplishment_score,
          initial_burnout_score,
          initial_burnout_level,
-         wellness_goals
+         wellness_goals,
+         height_cm,
+         weight_kg,
+         bmi
        )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-         $11, $12, $13, $14, $15, $16)
+         $11, $12, $13, $14, $15, $16, $17, $18, $19)
        ON CONFLICT (user_id)
        DO UPDATE SET
          role = EXCLUDED.role,
          lifestyle_type = EXCLUDED.lifestyle_type,
          wellness_goal = EXCLUDED.wellness_goal,
          wellness_goals = EXCLUDED.wellness_goals,
+         height_cm = EXCLUDED.height_cm,
+         weight_kg = EXCLUDED.weight_kg,
+         bmi = EXCLUDED.bmi,
          usual_sleep_time = EXCLUDED.usual_sleep_time,
          usual_wake_time = EXCLUDED.usual_wake_time,
          workload_level = EXCLUDED.workload_level,
@@ -1152,6 +1341,9 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
          lifestyle_type,
          wellness_goal,
          wellness_goals,
+         height_cm,
+         weight_kg,
+         bmi,
          to_char(usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
          to_char(usual_wake_time, 'HH24:MI') AS usual_wake_time,
          exercise_goal_days,
@@ -1181,9 +1373,22 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
         existingProfile.personal_accomplishment_score ?? null,
         existingProfile.initial_burnout_score ?? null,
         existingProfile.initial_burnout_level ?? null,
-        wellnessGoals
+        wellnessGoals,
+        profileBodyMetrics.height_cm,
+        profileBodyMetrics.weight_kg,
+        profileBodyMetrics.bmi
       ]
     );
+
+    const savedProfile = profileResult.rows[0];
+
+    if (bodyMetricsChanged && savedProfile.bmi != null) {
+      await ensureDefaultNutritionCalorieGoal({
+        client,
+        userId,
+        storedBmi: savedProfile.bmi
+      });
+    }
 
     await client.query(
       `UPDATE users
@@ -1224,9 +1429,12 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
          activity_level,
          work_hours_per_day,
          stress_level,
+         height_cm,
+         weight_kg,
+         bmi,
          skipped
        )
-       VALUES ($1, $2, $3, $4, $5, $6, FALSE)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE)
        ON CONFLICT (user_id)
        DO UPDATE SET
          role_type = EXCLUDED.role_type,
@@ -1234,6 +1442,9 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
          activity_level = EXCLUDED.activity_level,
          work_hours_per_day = EXCLUDED.work_hours_per_day,
          stress_level = EXCLUDED.stress_level,
+         height_cm = COALESCE(EXCLUDED.height_cm, user_onboarding.height_cm),
+         weight_kg = COALESCE(EXCLUDED.weight_kg, user_onboarding.weight_kg),
+         bmi = COALESCE(EXCLUDED.bmi, user_onboarding.bmi),
          skipped = FALSE,
          updated_at = NOW()`,
       [
@@ -1242,7 +1453,10 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
         sleepHoursBetween(usualSleepTime, usualWakeTime),
         activityLevelForLegacy(lifestyleType),
         workloadLevel >= 4 ? 10 : workloadLevel <= 2 ? 6 : 8,
-        workloadLevel
+        workloadLevel,
+        profileBodyMetrics.height_cm,
+        profileBodyMetrics.weight_kg,
+        profileBodyMetrics.bmi
       ]
     );
 
@@ -1286,14 +1500,17 @@ export async function updateUserWellnessProfile(userIdValue, payload = {}) {
         answer_value: String(workloadLevel),
         numeric_value: workloadLevel,
         is_reverse_scored: false
-      }
+      },
+      ...(hasCompleteBodyMetrics(savedProfile)
+        ? buildBodyMetricAnswerRecords(savedProfile)
+        : [])
     ]);
 
     await client.query('COMMIT');
 
     return {
-      profile: profileResult.rows[0],
-      baseline_for_ai: buildAiBaseline(profileResult.rows[0])
+      profile: savedProfile,
+      baseline_for_ai: buildAiBaseline(savedProfile)
     };
   } catch (error) {
     await client.query('ROLLBACK');

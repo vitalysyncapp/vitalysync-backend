@@ -10,6 +10,7 @@ export const GOAL_TYPES = [
 ];
 
 const GOAL_TYPE_SET = new Set(GOAL_TYPES);
+const RESERVED_GOAL_SOURCES = new Set(['system_default']);
 
 const WELLNESS_GOAL_OPTIONS = [
   'Reduce stress',
@@ -213,7 +214,10 @@ function normalizeGoal(goalType, rawGoal) {
     throw new GoalsServiceError(`Unsupported goal_type: ${goalType}`);
   }
 
-  const source = normalizeText(rawGoal?.source) ?? 'user';
+  const requestedSource = normalizeText(rawGoal?.source);
+  const source = RESERVED_GOAL_SOURCES.has(requestedSource)
+    ? 'user'
+    : requestedSource ?? 'user';
   const metadata = { ...normalizeMetadata(rawGoal?.metadata) };
 
   if (goalType === 'wellness') {

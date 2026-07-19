@@ -90,3 +90,16 @@ test('goals normalize structured wellness goal selections', () => {
     'Manage burnout',
   ]);
 });
+
+test('goals reserve system-generated provenance for backend writes', () => {
+  const goals = normalizeGoalsPayload({
+    goals: {
+      nutrition_calories: {
+        target_value: 2100,
+        source: 'system_default',
+      },
+    },
+  });
+
+  assert.equal(goals[0].source, 'user');
+});

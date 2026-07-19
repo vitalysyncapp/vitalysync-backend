@@ -7,6 +7,8 @@ import {
 } from '../src/controllers/nutrition.controller.js';
 import {
   calculateTotals,
+  defaultCalorieGoalForStoredBmi,
+  ensureDefaultNutritionCalorieGoal,
   isValidDateString,
   isValidMealType,
   normalizeMealType,
@@ -61,6 +63,59 @@ test('nutrition totals sum calories and macros safely', () => {
     total_carbs_g: 30,
     total_fat_g: 3.75,
   });
+});
+
+test('default calorie goals use stored BMI across WHO adult boundaries', () => {
+  assert.equal(defaultCalorieGoalForStoredBmi(18.4), 2200);
+  assert.equal(defaultCalorieGoalForStoredBmi(18.5), 2000);
+  assert.equal(defaultCalorieGoalForStoredBmi(24.9), 2000);
+  assert.equal(defaultCalorieGoalForStoredBmi(25), 1900);
+  assert.equal(defaultCalorieGoalForStoredBmi(30), 1800);
+  assert.equal(defaultCalorieGoalForStoredBmi(35), 1700);
+  assert.equal(defaultCalorieGoalForStoredBmi(40), 1600);
+});
+
+test('default calorie goals require a valid stored BMI', () => {
+  assert.throws(
+    () => defaultCalorieGoalForStoredBmi(null),
+    /Valid stored BMI is required/
+  );
+});
+
+test('default calorie goal persistence refreshes only system-generated goals', async () => {
+  const queries = [];
+  const client = {
+    async query(text, values) {
+      queries.push({ text, values });
+      return { rowCount: 0, rows: [] };
+    },
+  };
+
+  const created = await ensureDefaultNutritionCalorieGoal({
+    client,
+    userId: 7,
+    storedBmi: '30',
+  });
+
+  assert.equal(created, false);
+  assert.equal(queries.length, 1);
+  assert.deepEqual(queries[0].values, [
+    7,
+    'nutrition_calories',
+    1800,
+    'kcal',
+    'system_default',
+  ]);
+  assert.match(queries[0].text, /ON CONFLICT \(user_id, goal_type\)/);
+  assert.match(queries[0].text, /DO UPDATE SET/);
+  assert.match(
+    queries[0].text,
+    /WHERE user_goals\.source = EXCLUDED\.source/
+  );
+  assert.doesNotMatch(
+    JSON.stringify(queries[0]),
+    /underweight|pre_obesity|obesity_class/i
+  );
 });
 
 test('nutrition assistant nudge recommends protein when protein is low', () => {
