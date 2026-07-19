@@ -1,6 +1,8 @@
 import express from 'express';
 import multer from 'multer';
 
+import { rateLimiters } from '../middleware/rateLimit.middleware.js';
+
 import {
   analyzeNutrition,
   confirmNutrition,
@@ -100,10 +102,19 @@ function uploadImage(req, res, next) {
   });
 }
 
-router.post('/analyze', uploadImage, analyzeNutrition);
+router.post(
+  '/analyze',
+  rateLimiters.nutritionAnalysis,
+  uploadImage,
+  analyzeNutrition
+);
 router.post('/confirm', confirmNutrition);
 router.post('/discard-attempt', discardNutritionAttempt);
-router.get('/assistant-nudge', getAssistantNutritionNudge);
+router.get(
+  '/assistant-nudge',
+  rateLimiters.aiNudge,
+  getAssistantNutritionNudge
+);
 router.get('/daily', getDailyNutrition);
 router.get('/history', getNutritionHistory);
 

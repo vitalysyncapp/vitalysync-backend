@@ -6,6 +6,8 @@ import {
   optionalAuth,
   requireAuth
 } from './middleware/auth.middleware.js';
+import { rateLimitConfig } from './config/rateLimit.config.js';
+import { rateLimiters } from './middleware/rateLimit.middleware.js';
 import adaptiveRoutes from './routes/adaptive.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import activityRoutes from './routes/activity.routes.js';
@@ -21,10 +23,13 @@ import streakRoutes from './routes/streak.routes.js';
 
 const app = express();
 
-app.use(cors());
+app.set('trust proxy', rateLimitConfig.trustProxyHops);
+
+app.use(cors({
+  exposedHeaders: ['RateLimit', 'RateLimit-Policy', 'Retry-After'],
+}));
 app.use(express.json());
 
-app.use('/api/auth', authRoutes);
 app.get('/api/health', (_req, res) => {
   res.status(200).json({
     status: 'ok',
@@ -32,9 +37,18 @@ app.get('/api/health', (_req, res) => {
     timestamp: new Date().toISOString()
   });
 });
-app.use('/api/environment', optionalAuth, enforceAuthenticatedUser, environmentRoutes);
+app.use('/api', rateLimiters.perimeter);
 
-app.use('/api', requireAuth, enforceAuthenticatedUser);
+app.use('/api/auth', authRoutes);
+app.use(
+  '/api/environment',
+  optionalAuth,
+  rateLimiters.general,
+  enforceAuthenticatedUser,
+  environmentRoutes
+);
+
+app.use('/api', requireAuth, rateLimiters.general, enforceAuthenticatedUser);
 
 app.use('/api/adaptive', adaptiveRoutes);
 app.use('/api/activity', activityRoutes);

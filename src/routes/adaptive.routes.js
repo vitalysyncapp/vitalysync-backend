@@ -1,5 +1,7 @@
 import express from 'express';
 
+import { rateLimiters } from '../middleware/rateLimit.middleware.js';
+
 import {
   createNotificationEvent,
   createNudgeEvent,
@@ -19,10 +21,18 @@ const router = express.Router();
 router.get('/reminders', getReminderPreferences);
 router.put('/reminders', saveReminderPreferences);
 
-router.get('/nudges/recommendations', getNudgeRecommendations);
+router.get(
+  '/nudges/recommendations',
+  rateLimiters.aiNudge,
+  getNudgeRecommendations
+);
 
 router.get('/insight-reports', listInsightReports);
-router.post('/insight-reports/refresh', refreshInsightReports);
+router.post(
+  '/insight-reports/refresh',
+  rateLimiters.reportRefresh,
+  refreshInsightReports
+);
 
 router.get('/nudge-events', listNudgeEvents);
 router.post('/nudge-events', createNudgeEvent);
