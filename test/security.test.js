@@ -72,6 +72,39 @@ test('production CORS allows configured browser origins only', async () => {
   });
 });
 
+test('production CORS supports explicit loopback port wildcards', async () => {
+  const corsApp = express();
+  corsApp.use(cors(createCorsOptions({
+    NODE_ENV: 'production',
+    CORS_ALLOWED_ORIGINS: [
+      'https://app.vitalysync.example',
+      'http://localhost:*',
+      'http://127.0.0.1:*',
+    ].join(','),
+  })));
+  corsApp.get('/health', (_req, res) => res.status(200).json({ ok: true }));
+
+  await withServer(corsApp, async (baseUrl) => {
+    const localhost = await fetch(`${baseUrl}/health`, {
+      headers: { origin: 'http://localhost:57763' },
+    });
+    const loopbackIp = await fetch(`${baseUrl}/health`, {
+      headers: { origin: 'http://127.0.0.1:61234' },
+    });
+    const wrongProtocol = await fetch(`${baseUrl}/health`, {
+      headers: { origin: 'https://localhost:57763' },
+    });
+    const remoteHost = await fetch(`${baseUrl}/health`, {
+      headers: { origin: 'http://evil.example:57763' },
+    });
+
+    assert.equal(localhost.headers.get('access-control-allow-origin'), 'http://localhost:57763');
+    assert.equal(loopbackIp.headers.get('access-control-allow-origin'), 'http://127.0.0.1:61234');
+    assert.equal(wrongProtocol.headers.get('access-control-allow-origin'), null);
+    assert.equal(remoteHost.headers.get('access-control-allow-origin'), null);
+  });
+});
+
 test('authenticated middleware injects token user id when the client omits it', async () => {
   const authApp = express();
   authApp.use(express.json());
