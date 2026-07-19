@@ -1,13 +1,17 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 
 import {
   enforceAuthenticatedUser,
   optionalAuth,
   requireAuth
 } from './middleware/auth.middleware.js';
+import { attachRequestContext } from './middleware/requestContext.middleware.js';
+import { createCorsOptions } from './config/cors.config.js';
 import { rateLimitConfig } from './config/rateLimit.config.js';
 import { rateLimiters } from './middleware/rateLimit.middleware.js';
+import { logApiError } from './utils/errorLogging.js';
 import adaptiveRoutes from './routes/adaptive.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import activityRoutes from './routes/activity.routes.js';
@@ -23,12 +27,13 @@ import streakRoutes from './routes/streak.routes.js';
 
 const app = express();
 
+app.disable('x-powered-by');
 app.set('trust proxy', rateLimitConfig.trustProxyHops);
 
-app.use(cors({
-  exposedHeaders: ['RateLimit', 'RateLimit-Policy', 'Retry-After'],
-}));
-app.use(express.json());
+app.use(attachRequestContext);
+app.use(helmet());
+app.use(cors(createCorsOptions()));
+app.use(express.json({ limit: '100kb' }));
 
 app.get('/api/health', (_req, res) => {
   res.status(200).json({
@@ -67,9 +72,19 @@ app.use('/api', (req, res) => {
   });
 });
 
-app.use((error, _req, res, _next) => {
-  console.error('Unhandled API error:', error);
-  res.status(500).json({
+app.use((error, req, res, _next) => {
+  const clientErrorStatus = Number(error?.status ?? error?.statusCode);
+  if (Number.isInteger(clientErrorStatus) && clientErrorStatus >= 400 && clientErrorStatus < 500) {
+    return res.status(clientErrorStatus).json({
+      message: clientErrorStatus === 413
+        ? 'Request body is too large'
+        : 'Invalid request',
+    });
+  }
+
+  logApiError(req, 'Unhandled API error', error);
+
+  return res.status(500).json({
     message: 'Unexpected server error',
   });
 });

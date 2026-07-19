@@ -1,4 +1,5 @@
 import pool from '../config/db.js';
+import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import {
   getBurnoutScoreHistory,
   getLatestBurnoutScore,
@@ -65,7 +66,7 @@ async function ensureUserExists(client, userId) {
 }
 
 export async function getLatestScore(req, res) {
-  const userId = parsePositiveInt(req.query.user_id);
+  const userId = getAuthenticatedUserId(req) ?? parsePositiveInt(req.query.user_id);
 
   if (!userId) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -90,7 +91,7 @@ export async function getLatestScore(req, res) {
 }
 
 export async function getScoreHistory(req, res) {
-  const userId = parsePositiveInt(req.query.user_id);
+  const userId = getAuthenticatedUserId(req) ?? parsePositiveInt(req.query.user_id);
   const endDate = String(req.query.end ?? todayKey()).trim();
   const startDate = req.query.start == null
     ? isValidDateString(endDate)
@@ -136,7 +137,7 @@ export async function getScoreHistory(req, res) {
 
 export async function recalculateScore(req, res) {
   const body = req.body ?? {};
-  const userId = parsePositiveInt(body.user_id);
+  const userId = getAuthenticatedUserId(req) ?? parsePositiveInt(body.user_id);
   const scoreDate = String(body.score_date ?? todayKey()).trim();
 
   if (!userId) {
@@ -172,7 +173,7 @@ export async function recalculateScore(req, res) {
 }
 
 export async function getPatternSummary(req, res) {
-  const userId = parsePositiveInt(req.query.user_id);
+  const userId = getAuthenticatedUserId(req) ?? parsePositiveInt(req.query.user_id);
   const endDate = String(req.query.end ?? todayKey()).trim();
   const refreshScores = parseOptionalBoolean(req.query.refresh, true);
 

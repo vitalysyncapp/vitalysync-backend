@@ -8,6 +8,8 @@ import {
 
 const router = express.Router();
 
+router.get('/', getStreakOverview);
+router.get('/leaderboard', getStreakLeaderboard);
 router.get('/:userId', requireMatchingParamUser(), getStreakOverview);
 router.get('/:userId/leaderboard', requireMatchingParamUser(), getStreakLeaderboard);
 

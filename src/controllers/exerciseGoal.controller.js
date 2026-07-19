@@ -1,4 +1,5 @@
 import pool from '../config/db.js';
+import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 
 const DEFAULT_RECOMMENDED_BY = 'vitalysync_assistant';
 const DEFAULT_SOURCE = 'assistant';
@@ -149,7 +150,7 @@ async function readTodayGoal(client, userId, logDate) {
 }
 
 export async function getTodayExerciseGoal(req, res) {
-  const userId = Number(req.params.userId);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.params.userId);
   const logDate = normalizeText(req.query?.date, todayKey());
 
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -179,7 +180,7 @@ export async function getTodayExerciseGoal(req, res) {
 }
 
 export async function getExerciseGoalHistory(req, res) {
-  const userId = Number(req.params.userId);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.params.userId);
   const endDate = normalizeText(req.query?.end, todayKey());
   const startDate = normalizeText(
     req.query?.start,
@@ -239,7 +240,7 @@ export async function getExerciseGoalHistory(req, res) {
 }
 
 export async function chooseExerciseGoal(req, res) {
-  const userId = Number(req.body?.user_id);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.body?.user_id);
   const payload = normalizeChoicePayload(req.body);
 
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -324,7 +325,7 @@ export async function chooseExerciseGoal(req, res) {
 }
 
 export async function updateExerciseGoalProgress(req, res) {
-  const userId = Number(req.body?.user_id);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.body?.user_id);
   const logDate = normalizeText(req.body?.log_date, todayKey());
   const distanceMeters = Math.max(0, toNumber(req.body?.distance_meters, 0));
 
@@ -405,7 +406,7 @@ export async function cancelExerciseGoal(req, res) {
 }
 
 async function updateExerciseGoalStatus(req, res, status) {
-  const userId = Number(req.body?.user_id);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.body?.user_id);
   const logDate = normalizeText(req.body?.log_date, todayKey());
 
   if (!Number.isInteger(userId) || userId <= 0) {

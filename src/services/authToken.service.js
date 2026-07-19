@@ -2,6 +2,7 @@ import crypto from 'crypto';
 
 const TOKEN_VERSION = 'VS1';
 const DEFAULT_EXPIRES_IN_SECONDS = 60 * 60 * 24 * 7;
+const MIN_PRODUCTION_SECRET_LENGTH = 32;
 
 function base64UrlEncode(value) {
   return Buffer.from(value)
@@ -23,6 +24,18 @@ function getTokenSecret() {
   const secret = String(process.env.AUTH_TOKEN_SECRET ?? '').trim();
 
   if (secret) {
+    if (
+      process.env.NODE_ENV === 'production' &&
+      (
+        secret.length < MIN_PRODUCTION_SECRET_LENGTH ||
+        secret === 'replace-with-a-long-random-secret'
+      )
+    ) {
+      throw new Error(
+        `AUTH_TOKEN_SECRET must be at least ${MIN_PRODUCTION_SECRET_LENGTH} characters in production`
+      );
+    }
+
     return secret;
   }
 
@@ -53,8 +66,6 @@ export function createAccessToken(user) {
   };
   const payload = {
     sub: Number(user.user_id),
-    email: String(user.email ?? ''),
-    username: String(user.username ?? ''),
     iat: now,
     exp: now + expiresIn
   };

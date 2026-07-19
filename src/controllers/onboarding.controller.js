@@ -1,4 +1,5 @@
 import pool from '../config/db.js';
+import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import {
   OnboardingServiceError,
   getOnboardingStatus as fetchRequiredOnboardingStatus,
@@ -223,7 +224,7 @@ async function fetchOnboardingBundle(userId) {
 }
 
 export async function getOnboardingSummary(req, res) {
-  const userId = Number(req.params.userId);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.params.userId);
 
   if (!Number.isInteger(userId) || userId <= 0) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -251,7 +252,7 @@ export async function getOnboardingSummary(req, res) {
 }
 
 export async function getRequiredOnboardingStatus(req, res) {
-  const userId = Number(req.params.userId);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.params.userId);
 
   if (!Number.isInteger(userId) || userId <= 0) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -287,7 +288,8 @@ export async function submitOnboarding(req, res) {
 
 export async function updateWellnessProfile(req, res) {
   try {
-    const payload = await updateUserWellnessProfile(req.params.userId, req.body);
+    const userId = getAuthenticatedUserId(req) ?? req.params.userId;
+    const payload = await updateUserWellnessProfile(userId, req.body);
     return res.status(200).json({
       message: 'Wellness profile updated successfully',
       ...payload
@@ -304,7 +306,8 @@ export async function updateWellnessProfile(req, res) {
 
 export async function updateBurnoutBaseline(req, res) {
   try {
-    const payload = await updateUserBurnoutBaseline(req.params.userId, req.body);
+    const userId = getAuthenticatedUserId(req) ?? req.params.userId;
+    const payload = await updateUserBurnoutBaseline(userId, req.body);
     return res.status(200).json(payload);
   } catch (error) {
     if (error instanceof OnboardingServiceError) {
@@ -334,7 +337,7 @@ export async function createOnboarding(req, res) {
     skipped = false
   } = req.body;
 
-  const userId = Number(rawUserId);
+  const userId = getAuthenticatedUserId(req) ?? Number(rawUserId);
   const normalizedRoleType = normalizeText(role_type);
   const normalizedActivityLevel = normalizeText(activity_level);
   const normalizedMealRegularness = normalizeText(meal_regularness);
@@ -409,7 +412,7 @@ export async function createOnboarding(req, res) {
 }
 
 export async function updateOnboarding(req, res) {
-  const userId = Number(req.params.userId);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.params.userId);
   const {
     role_type,
     work_hours_per_day,
@@ -528,7 +531,7 @@ export async function createPreferences(req, res) {
     busy_days = []
   } = req.body;
 
-  const userId = Number(rawUserId);
+  const userId = getAuthenticatedUserId(req) ?? Number(rawUserId);
   const normalizedNudgeStyle = normalizeText(preferred_nudge_style);
   const normalizedGoal = normalizePrimaryGoal(primary_goal);
   const normalizedBusyDays = normalizeBusyDays(busy_days);
@@ -623,7 +626,7 @@ export async function createPreferences(req, res) {
 }
 
 export async function updatePreferences(req, res) {
-  const userId = Number(req.params.userId);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.params.userId);
   const {
     preferred_log_time,
     default_wake_time,

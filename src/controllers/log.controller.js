@@ -1,4 +1,5 @@
 import pool from '../config/db.js';
+import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import {
   upsertBurnoutScoreForDate,
   upsertBurnoutScoresForWeek
@@ -164,7 +165,7 @@ function formatStreakPayload(streakRow) {
 }
 
 export async function getTodayLog(req, res) {
-  const userId = Number(req.query.user_id);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.query.user_id);
   const logDate = String(req.query.log_date ?? '').trim();
 
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -224,7 +225,7 @@ export async function getTodayLog(req, res) {
 }
 
 export async function getCurrentStreak(req, res) {
-  const userId = Number(req.query.user_id);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.query.user_id);
 
   if (!Number.isInteger(userId) || userId <= 0) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -256,7 +257,7 @@ export async function getCurrentStreak(req, res) {
 }
 
 export async function getLatestLog(req, res) {
-  const userId = Number(req.query.user_id);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.query.user_id);
 
   if (!Number.isInteger(userId) || userId <= 0) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -313,7 +314,7 @@ export async function getLatestLog(req, res) {
 }
 
 export async function getLogHistory(req, res) {
-  const userId = Number(req.query.user_id);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.query.user_id);
   const startDate = String(req.query.start ?? '').trim();
   const endDate = String(req.query.end ?? '').trim();
   const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 90);
@@ -412,7 +413,7 @@ export async function saveDailyLog(req, res) {
     streak_restore_decision: streakRestoreDecision
   } = req.body;
 
-  const userId = Number(rawUserId);
+  const userId = getAuthenticatedUserId(req) ?? Number(rawUserId);
   const normalizedExercises = normalizeStringArray(exerciseNames);
   const normalizedSymptoms = normalizeStringArray(symptomNames);
   const normalizedHabits = normalizeStringArray(habitNames);
@@ -732,7 +733,7 @@ export async function saveDailyLog(req, res) {
 }
 
 export async function getWeeklyPulseStatus(req, res) {
-  const userId = Number(req.query.user_id);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.query.user_id);
   const weekStartDate = getWeekStartDate(req.query.date ?? new Date());
 
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -789,7 +790,7 @@ export async function saveWeeklyPulse(req, res) {
     detachment_level: detachmentLevel,
     accomplishment_level: accomplishmentLevel
   } = req.body;
-  const userId = Number(rawUserId);
+  const userId = getAuthenticatedUserId(req) ?? Number(rawUserId);
   const weekStartDate = getWeekStartDate(responseDate ?? new Date());
   const normalizedProductivityFocus = parseLikert(productivityFocusLevel);
   const normalizedRecoveryRest = parseLikert(recoveryRestLevel);

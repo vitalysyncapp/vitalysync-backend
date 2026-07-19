@@ -1,4 +1,5 @@
 import pool from '../config/db.js';
+import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import { upsertBurnoutScoreForDate } from '../services/burnoutScoringService.js';
 
 const DEFAULT_GOAL_STEPS = 5000;
@@ -92,7 +93,7 @@ async function ensureUserExists(client, userId) {
 }
 
 async function upsertActivityLog(req, res, successMessage) {
-  const userId = Number(req.body?.user_id);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.body?.user_id);
   const payload = normalizeActivityPayload(req.body);
 
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -199,7 +200,7 @@ async function upsertActivityLog(req, res, successMessage) {
 }
 
 export async function getTodayActivity(req, res) {
-  const userId = Number(req.params.userId);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.params.userId);
   const logDate = String(req.query?.date ?? todayKey()).trim();
 
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -248,7 +249,7 @@ export async function getTodayActivity(req, res) {
 }
 
 export async function getActivityHistory(req, res) {
-  const userId = Number(req.params.userId);
+  const userId = getAuthenticatedUserId(req) ?? Number(req.params.userId);
   const endDate = String(req.query?.end ?? todayKey()).trim();
   const startDate = String(
     req.query?.start ??

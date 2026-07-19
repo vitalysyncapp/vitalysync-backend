@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 
+import { enforceAuthenticatedUser } from '../middleware/auth.middleware.js';
 import { rateLimiters } from '../middleware/rateLimit.middleware.js';
 
 import {
@@ -18,6 +19,10 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 8 * 1024 * 1024,
+    files: 1,
+    fields: 16,
+    parts: 18,
+    fieldSize: 32 * 1024,
   },
 });
 
@@ -89,7 +94,7 @@ function uploadImage(req, res, next) {
       const detectedMime = detectImageMime(req.file.buffer);
       const declaredMime = String(req.file.mimetype ?? '').toLowerCase();
 
-      if (!detectedMime && !declaredMime.startsWith('image/')) {
+      if (!declaredMime.startsWith('image/') || !detectedMime) {
         return res.status(400).json({
           message: 'Only image uploads are allowed',
         });
@@ -106,6 +111,7 @@ router.post(
   '/analyze',
   rateLimiters.nutritionAnalysis,
   uploadImage,
+  enforceAuthenticatedUser,
   analyzeNutrition
 );
 router.post('/confirm', confirmNutrition);

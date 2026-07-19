@@ -5,6 +5,7 @@ import { getProfile } from '../controllers/profile.controller.js';
 
 const router = express.Router();
 
+router.get('/', getProfile);
 router.get('/:userId', requireMatchingParamUser(), getProfile);
 
 export default router;

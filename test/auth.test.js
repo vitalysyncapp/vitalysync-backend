@@ -18,8 +18,10 @@ test('auth tokens round-trip signed user identity', () => {
   const payload = verifyAccessToken(token.access_token);
 
   assert.equal(payload.sub, 42);
-  assert.equal(payload.email, 'student@example.com');
-  assert.equal(payload.username, 'student');
+  assert.equal(payload.email, undefined);
+  assert.equal(payload.username, undefined);
+  assert.equal(typeof payload.iat, 'number');
+  assert.equal(typeof payload.exp, 'number');
 });
 
 test('auth token verification rejects tampered tokens', () => {

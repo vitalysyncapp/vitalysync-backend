@@ -1,4 +1,5 @@
 import pool from '../config/db.js';
+import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import {
   calculateTotals,
   detectFoodsFromManualInput,
@@ -14,6 +15,11 @@ import {
 } from '../services/nutritionAssistantNudgeService.js';
 
 function getUserId(req) {
+  const authenticatedUserId = getAuthenticatedUserId(req);
+  if (authenticatedUserId) {
+    return authenticatedUserId;
+  }
+
   const rawUserId = req.body?.user_id ?? req.query?.user_id;
   const userId = Number(rawUserId);
   return Number.isInteger(userId) && userId > 0 ? userId : null;

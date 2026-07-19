@@ -1,6 +1,8 @@
 import bcrypt from 'bcrypt';
 import pool from '../config/db.js';
+import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import { createAccessToken } from '../services/authToken.service.js';
+import { logApiError } from '../utils/errorLogging.js';
 
 let authSchemaSupportCache = null;
 let authSchemaSupportFetchedAt = 0;
@@ -291,10 +293,9 @@ export async function signup(req, res) {
     });
 
   } catch (err) {
-    console.error('Signup error:', err);
+    logApiError(req, 'Signup error', err);
     res.status(500).json({
-      message: err.message || 'Signup failed',
-      error: err.message,
+      message: 'Signup failed',
     });
   }
 }
@@ -381,10 +382,9 @@ export async function login(req, res) {
       ...token
     });
   } catch (err) {
-    console.error('Login error:', err);
+    logApiError(req, 'Login error', err);
     res.status(500).json({
-      message: err.message || 'Login failed',
-      error: err.message,
+      message: 'Login failed',
     });
   }
 }
@@ -405,7 +405,10 @@ export async function updateProfile(req, res) {
     const normalizedAge = normalizeOptionalAge(age);
     const normalizedGender = normalizeOptionalGender(gender);
 
-    if (!user_id || !normalizedUsername || !normalizedEmail) {
+    const authenticatedUserId = getAuthenticatedUserId(req);
+    const effectiveUserId = authenticatedUserId ?? Number(user_id);
+
+    if (!effectiveUserId || !normalizedUsername || !normalizedEmail) {
       return res.status(400).json({
         message: 'User ID, username, and email are required'
       });
@@ -423,7 +426,7 @@ export async function updateProfile(req, res) {
 
     const existingUser = await pool.query(
       'SELECT user_id FROM users WHERE user_id = $1',
-      [user_id]
+      [effectiveUserId]
     );
 
     if (existingUser.rows.length === 0) {
@@ -434,7 +437,7 @@ export async function updateProfile(req, res) {
       `SELECT user_id
        FROM users
        WHERE (email = $1 OR username = $2) AND user_id <> $3`,
-      [normalizedEmail, normalizedUsername, user_id]
+      [normalizedEmail, normalizedUsername, effectiveUserId]
     );
 
     if (duplicateUser.rows.length > 0) {
@@ -461,7 +464,7 @@ export async function updateProfile(req, res) {
       updateAssignments.push(`role = $${updateValues.length}`);
     }
 
-    updateValues.push(user_id);
+    updateValues.push(effectiveUserId);
     const userIdPlaceholder = `$${updateValues.length}`;
     const ageSelect = schema.has_age ? 'age' : 'NULL::INTEGER AS age';
     const genderSelect = schema.has_gender ? 'gender' : 'NULL::TEXT AS gender';
@@ -494,7 +497,7 @@ export async function updateProfile(req, res) {
          SET role = $2,
              updated_at = CURRENT_TIMESTAMP
          WHERE user_id = $1`,
-        [user_id, normalizedUserType]
+        [effectiveUserId, normalizedUserType]
       );
     }
 
@@ -505,7 +508,7 @@ export async function updateProfile(req, res) {
          ON CONFLICT (user_id) DO UPDATE SET
            role_type = EXCLUDED.role_type,
            updated_at = NOW()`,
-        [user_id, normalizedUserType]
+        [effectiveUserId, normalizedUserType]
       );
     }
 
@@ -514,7 +517,7 @@ export async function updateProfile(req, res) {
           `SELECT role_type AS user_type
            FROM user_onboarding
            WHERE user_id = $1`,
-          [user_id]
+          [effectiveUserId]
         )
       : { rows: [] };
     const profileResult = schema.has_user_onboarding_profiles
@@ -524,7 +527,7 @@ export async function updateProfile(req, res) {
              FROM user_onboarding_profiles
              WHERE user_id = $1
            ) AS has_onboarding_profile`,
-          [user_id]
+          [effectiveUserId]
         )
       : { rows: [{ has_onboarding_profile: false }] };
 
@@ -542,10 +545,9 @@ export async function updateProfile(req, res) {
       })
     });
   } catch (err) {
-    console.error('Profile update error:', err);
+    logApiError(req, 'Profile update error', err);
     res.status(500).json({
-      message: err.message || 'Failed to update profile',
-      error: err.message,
+      message: 'Failed to update profile',
     });
   }
 }
@@ -624,7 +626,7 @@ export async function deleteAccount(req, res) {
     password
   } = req.body;
 
-  const userId = Number(rawUserId);
+  const userId = getAuthenticatedUserId(req) ?? Number(rawUserId);
   const normalizedEmail = String(email ?? '').trim().toLowerCase();
   const normalizedPassword = String(password ?? '').trim();
 
@@ -750,7 +752,7 @@ export async function deleteAccount(req, res) {
     });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('Delete account error:', err);
+    logApiError(req, 'Delete account error', err);
     return res.status(500).json({ message: 'Failed to delete account' });
   } finally {
     client.release();

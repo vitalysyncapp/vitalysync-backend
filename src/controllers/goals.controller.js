@@ -3,10 +3,12 @@ import {
   getUserGoals as fetchUserGoals,
   upsertUserGoals,
 } from '../services/goals.service.js';
+import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 
 export async function getUserGoals(req, res) {
   try {
-    const payload = await fetchUserGoals(req.params.userId);
+    const userId = getAuthenticatedUserId(req) ?? req.params.userId;
+    const payload = await fetchUserGoals(userId);
 
     if (!payload) {
       return res.status(404).json({ message: 'User not found' });
@@ -25,7 +27,8 @@ export async function getUserGoals(req, res) {
 
 export async function updateUserGoals(req, res) {
   try {
-    const payload = await upsertUserGoals(req.params.userId, req.body);
+    const userId = getAuthenticatedUserId(req) ?? req.params.userId;
+    const payload = await upsertUserGoals(userId, req.body);
     return res.status(200).json({
       message: 'Goals updated successfully',
       ...payload,

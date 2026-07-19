@@ -8,6 +8,8 @@ import {
 
 const router = express.Router();
 
+router.get('/', getUserGoals);
+router.put('/', updateUserGoals);
 router.get('/:userId', requireMatchingParamUser(), getUserGoals);
 router.put('/:userId', requireMatchingParamUser(), updateUserGoals);
 

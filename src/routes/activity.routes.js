@@ -10,7 +10,9 @@ import {
 
 const router = express.Router();
 
+router.get('/history', getActivityHistory);
 router.get('/history/:userId', requireMatchingParamUser(), getActivityHistory);
+router.get('/today', getTodayActivity);
 router.get('/today/:userId', requireMatchingParamUser(), getTodayActivity);
 router.post('/save', saveActivityLog);
 router.put('/update', updateActivityLog);

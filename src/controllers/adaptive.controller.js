@@ -1,4 +1,5 @@
 import pool from '../config/db.js';
+import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import {
   getAdaptiveNudgeRecommendations
 } from '../services/adaptiveNudgeService.js';
@@ -25,6 +26,10 @@ const ALLOWED_NOTIFICATION_STATUSES = new Set([
 function parsePositiveInt(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getRequestUserId(req, fallback) {
+  return getAuthenticatedUserId(req) ?? parsePositiveInt(fallback);
 }
 
 function parseLimitedInt(value, fallback = 20, max = 50) {
@@ -204,7 +209,7 @@ function formatNotificationEvent(row) {
 }
 
 export async function getReminderPreferences(req, res) {
-  const userId = parsePositiveInt(req.query.user_id);
+  const userId = getRequestUserId(req, req.query.user_id);
 
   if (!userId) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -250,7 +255,7 @@ export async function getReminderPreferences(req, res) {
 
 export async function saveReminderPreferences(req, res) {
   const body = req.body ?? {};
-  const userId = parsePositiveInt(body.user_id);
+  const userId = getRequestUserId(req, body.user_id);
   const dailyLogReminderTime = normalizeTime(body.daily_log_reminder_time);
   const weeklyPulseReminderDay = parseWeekday(body.weekly_pulse_reminder_day);
   const weeklyPulseReminderTime = normalizeTime(body.weekly_pulse_reminder_time);
@@ -431,7 +436,7 @@ export async function saveReminderPreferences(req, res) {
 
 export async function listInsightReports(req, res) {
   const query = req.query ?? {};
-  const userId = parsePositiveInt(query.user_id);
+  const userId = getRequestUserId(req, query.user_id);
   const limit = parseLimitedInt(query.limit, 30, 50);
 
   if (!userId) {
@@ -456,7 +461,7 @@ export async function listInsightReports(req, res) {
 export async function refreshInsightReports(req, res) {
   const body = req.body ?? {};
   const query = req.query ?? {};
-  const userId = parsePositiveInt(body.user_id ?? query.user_id);
+  const userId = getRequestUserId(req, body.user_id ?? query.user_id);
   const date = normalizeDateOnly(body.date ?? query.date);
 
   if (!userId) {
@@ -488,7 +493,7 @@ export async function refreshInsightReports(req, res) {
 }
 
 export async function getNudgeRecommendations(req, res) {
-  const userId = parsePositiveInt(req.query.user_id);
+  const userId = getRequestUserId(req, req.query.user_id);
   const limit = parseLimitedInt(req.query.limit, 3, 5);
   const recordShown = req.query.record == null
     ? true
@@ -539,7 +544,7 @@ export async function getNudgeRecommendations(req, res) {
 }
 
 export async function listNudgeEvents(req, res) {
-  const userId = parsePositiveInt(req.query.user_id);
+  const userId = getRequestUserId(req, req.query.user_id);
   const limit = parseLimitedInt(req.query.limit);
 
   if (!userId) {
@@ -583,7 +588,7 @@ export async function listNudgeEvents(req, res) {
 
 export async function createNudgeEvent(req, res) {
   const body = req.body ?? {};
-  const userId = parsePositiveInt(body.user_id);
+  const userId = getRequestUserId(req, body.user_id);
   const nudgeType = normalizeRequiredText(body.nudge_type);
   const message = normalizeRequiredText(body.message);
   const triggerReason = normalizeNullableText(body.trigger_reason);
@@ -667,7 +672,7 @@ export async function createNudgeEvent(req, res) {
 
 export async function updateNudgeEventStatus(req, res) {
   const eventId = parsePositiveInt(req.params.eventId);
-  const userId = parsePositiveInt(req.body?.user_id);
+  const userId = getRequestUserId(req, req.body?.user_id);
   const status = normalizeRequiredText(req.body?.status);
 
   if (!eventId) {
@@ -719,7 +724,7 @@ export async function updateNudgeEventStatus(req, res) {
 }
 
 export async function listNotificationEvents(req, res) {
-  const userId = parsePositiveInt(req.query.user_id);
+  const userId = getRequestUserId(req, req.query.user_id);
   const limit = parseLimitedInt(req.query.limit);
 
   if (!userId) {
@@ -763,7 +768,7 @@ export async function listNotificationEvents(req, res) {
 
 export async function createNotificationEvent(req, res) {
   const body = req.body ?? {};
-  const userId = parsePositiveInt(body.user_id);
+  const userId = getRequestUserId(req, body.user_id);
   const notificationType = normalizeRequiredText(body.notification_type);
   const title = normalizeRequiredText(body.title);
   const notificationBody = normalizeRequiredText(body.body);
@@ -886,7 +891,7 @@ export async function createNotificationEvent(req, res) {
 
 export async function updateNotificationEventStatus(req, res) {
   const eventId = parsePositiveInt(req.params.eventId);
-  const userId = parsePositiveInt(req.body?.user_id);
+  const userId = getRequestUserId(req, req.body?.user_id);
   const status = normalizeRequiredText(req.body?.status);
 
   if (!eventId) {

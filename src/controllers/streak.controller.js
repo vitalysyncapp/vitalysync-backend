@@ -3,10 +3,12 @@ import {
   readLeaderboard,
   readStreakOverview,
 } from '../services/streak.service.js';
+import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 
 export async function getStreakOverview(req, res) {
   try {
-    const payload = await readStreakOverview(req.params.userId);
+    const userId = getAuthenticatedUserId(req) ?? req.params.userId;
+    const payload = await readStreakOverview(userId);
 
     if (!payload) {
       return res.status(404).json({ message: 'User not found' });
@@ -28,7 +30,8 @@ export async function getStreakOverview(req, res) {
 
 export async function getStreakLeaderboard(req, res) {
   try {
-    const payload = await readLeaderboard(req.params.userId, {
+    const userId = getAuthenticatedUserId(req) ?? req.params.userId;
+    const payload = await readLeaderboard(userId, {
       section: String(req.query.section ?? 'global'),
       metric: String(req.query.metric ?? 'current'),
       limit: req.query.limit,
