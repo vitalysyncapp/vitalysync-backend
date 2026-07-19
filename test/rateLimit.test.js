@@ -113,7 +113,7 @@ test('perimeter limits by forwarded IP while health and preflight bypass it', as
     assert.equal(blocked.status, 429);
     assert.equal(
       blockedBody.message,
-      'Too many requests. Please wait before trying again.'
+      'Too many requests. Please wait 1 second before trying again.'
     );
     assert.ok(Number.isInteger(blockedBody.retry_after_seconds));
     assert.ok(Number(blocked.headers.get('retry-after')) >= 1);

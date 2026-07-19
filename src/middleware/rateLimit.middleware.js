@@ -3,8 +3,6 @@ import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 
 import { rateLimitConfig } from '../config/rateLimit.config.js';
 
-const RATE_LIMIT_MESSAGE = 'Too many requests. Please wait before trying again.';
-
 function clientIpKey(req) {
   return `ip:${ipKeyGenerator(req.ip)}`;
 }
@@ -65,6 +63,25 @@ function retryAfterSeconds(req, windowMs) {
   return Math.max(1, Math.ceil(remainingMs / 1000));
 }
 
+function formatWaitTime(totalSeconds) {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts = [];
+
+  if (hours > 0) {
+    parts.push(`${hours} hour${hours === 1 ? '' : 's'}`);
+  }
+  if (minutes > 0) {
+    parts.push(`${minutes} minute${minutes === 1 ? '' : 's'}`);
+  }
+  if (seconds > 0 || parts.length === 0) {
+    parts.push(`${seconds} second${seconds === 1 ? '' : 's'}`);
+  }
+
+  return parts.join(' ');
+}
+
 function createLimiter({
   identifier,
   policy,
@@ -84,9 +101,10 @@ function createLimiter({
     legacyHeaders: false,
     handler: (req, res) => {
       const retrySeconds = retryAfterSeconds(req, policy.windowMs);
+      const waitTime = formatWaitTime(retrySeconds);
       res.set('Retry-After', String(retrySeconds));
       return res.status(429).json({
-        message: RATE_LIMIT_MESSAGE,
+        message: `Too many requests. Please wait ${waitTime} before trying again.`,
         retry_after_seconds: retrySeconds,
       });
     },
