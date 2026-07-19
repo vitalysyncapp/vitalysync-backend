@@ -1,4 +1,5 @@
 import pool from '../config/db.js';
+import { defaultCalorieGoalForStoredBmi } from './nutrition.service.js';
 
 export const GOAL_TYPES = [
   'wellness',
@@ -197,6 +198,16 @@ function hydrationGoalFromActivity(activity) {
   return 2.5;
 }
 
+function defaultNutritionCaloriesFromBmi(profile, legacyOnboarding) {
+  const storedBmi = profile?.bmi ?? legacyOnboarding?.bmi;
+
+  try {
+    return defaultCalorieGoalForStoredBmi(storedBmi);
+  } catch {
+    return null;
+  }
+}
+
 function normalizeMetadata(value) {
   if (value == null) {
     return {};
@@ -386,6 +397,10 @@ function buildFallbackGoals({ profile, legacyOnboarding, preferences, latestActi
     : normalizeText(profile?.wellness_goal) ??
       normalizeText(preferences?.primary_goal) ??
       GOAL_DEFAULTS.wellness.target_text;
+  const defaultNutritionCalories = defaultNutritionCaloriesFromBmi(
+    profile,
+    legacyOnboarding
+  );
 
   return {
     wellness: {
@@ -426,7 +441,9 @@ function buildFallbackGoals({ profile, legacyOnboarding, preferences, latestActi
     nutrition_calories: {
       goal_type: 'nutrition_calories',
       ...GOAL_DEFAULTS.nutrition_calories,
-      source: 'default',
+      target_value:
+        defaultNutritionCalories ?? GOAL_DEFAULTS.nutrition_calories.target_value,
+      source: defaultNutritionCalories == null ? 'default' : 'system_default',
       metadata: {},
     },
   };
@@ -448,6 +465,7 @@ async function readGoalContext(client, userId) {
        wellness_goals,
        lifestyle_type,
        exercise_goal_days,
+       bmi,
        to_char(usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
        to_char(usual_wake_time, 'HH24:MI') AS usual_wake_time
      FROM user_onboarding_profiles
@@ -455,7 +473,7 @@ async function readGoalContext(client, userId) {
     [userId]
   );
   const legacyOnboardingResult = await client.query(
-    `SELECT sleep_hours, exercise_days_per_week, activity_level
+    `SELECT sleep_hours, exercise_days_per_week, activity_level, bmi
      FROM user_onboarding
      WHERE user_id = $1`,
     [userId]

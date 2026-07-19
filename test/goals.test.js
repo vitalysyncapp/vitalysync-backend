@@ -6,6 +6,7 @@ import {
   getUserGoals,
   normalizeGoalsPayload,
 } from '../src/services/goals.service.js';
+import pool from '../src/config/db.js';
 
 test('goals reject invalid user ids before database work', async () => {
   await assert.rejects(
@@ -102,4 +103,135 @@ test('goals reserve system-generated provenance for backend writes', () => {
   });
 
   assert.equal(goals[0].source, 'user');
+});
+
+test('goals derive fallback nutrition calories from stored BMI', async () => {
+  const originalConnect = pool.connect;
+  const fakeClient = {
+    async query(text) {
+      if (text.includes('SELECT user_id FROM users')) {
+        return { rowCount: 1, rows: [{ user_id: 1 }] };
+      }
+
+      if (text.includes('FROM user_onboarding_profiles')) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              wellness_goal: 'Improve sleep',
+              wellness_goals: ['Improve sleep'],
+              lifestyle_type: 'Sedentary',
+              exercise_goal_days: '3-4 days',
+              bmi: '31.3',
+              usual_sleep_time: '22:00',
+              usual_wake_time: '06:00',
+            },
+          ],
+        };
+      }
+
+      if (text.includes('FROM user_onboarding')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('FROM user_preferences')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('FROM daily_activity_logs')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('FROM user_goals')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      throw new Error(`Unexpected query: ${text}`);
+    },
+    release() {},
+  };
+
+  pool.connect = async () => fakeClient;
+
+  try {
+    const result = await getUserGoals(1);
+    const nutritionGoal = result.goals.nutrition_calories;
+
+    assert.equal(nutritionGoal.target_value, 1800);
+    assert.equal(nutritionGoal.source, 'system_default');
+    assert.equal(nutritionGoal.display_value, '1,800 kcal');
+  } finally {
+    pool.connect = originalConnect;
+  }
+});
+
+test('goals keep manually saved nutrition calories over BMI fallback', async () => {
+  const originalConnect = pool.connect;
+  const fakeClient = {
+    async query(text) {
+      if (text.includes('SELECT user_id FROM users')) {
+        return { rowCount: 1, rows: [{ user_id: 1 }] };
+      }
+
+      if (text.includes('FROM user_onboarding_profiles')) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              wellness_goal: 'Improve sleep',
+              wellness_goals: ['Improve sleep'],
+              lifestyle_type: 'Sedentary',
+              exercise_goal_days: '3-4 days',
+              bmi: '31.3',
+              usual_sleep_time: '22:00',
+              usual_wake_time: '06:00',
+            },
+          ],
+        };
+      }
+
+      if (text.includes('FROM user_onboarding')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('FROM user_preferences')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('FROM daily_activity_logs')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('FROM user_goals')) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              goal_type: 'nutrition_calories',
+              target_value: 2400,
+              target_text: null,
+              unit: 'kcal',
+              source: 'user',
+              metadata: {},
+            },
+          ],
+        };
+      }
+
+      throw new Error(`Unexpected query: ${text}`);
+    },
+    release() {},
+  };
+
+  pool.connect = async () => fakeClient;
+
+  try {
+    const result = await getUserGoals(1);
+    const nutritionGoal = result.goals.nutrition_calories;
+
+    assert.equal(nutritionGoal.target_value, 2400);
+    assert.equal(nutritionGoal.source, 'user');
+  } finally {
+    pool.connect = originalConnect;
+  }
 });
