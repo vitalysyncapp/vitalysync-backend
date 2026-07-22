@@ -1,7 +1,7 @@
 import pool from '../config/db.js';
 
 const OPENWEATHER_BASE_URL = 'https://api.openweathermap.org/data/2.5';
-const OPENWEATHER_TIMEOUT_MS = 8000;
+const DEFAULT_OPENWEATHER_TIMEOUT_MS = 12000;
 
 const AQI_LABELS = {
   1: 'Good',
@@ -21,9 +21,34 @@ function buildOpenWeatherUrl(path, params) {
   return url;
 }
 
+function readPositiveInteger(value, fallback, name) {
+  const raw = value == null ? '' : String(value).trim();
+  if (raw === '') {
+    return fallback;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+
+  return parsed;
+}
+
+export function readEnvironmentTimeoutConfig(env = process.env) {
+  return Object.freeze({
+    openWeatherMs: readPositiveInteger(
+      env.OPENWEATHER_TIMEOUT_MS,
+      DEFAULT_OPENWEATHER_TIMEOUT_MS,
+      'OPENWEATHER_TIMEOUT_MS'
+    )
+  });
+}
+
 async function fetchJson(url) {
+  const { openWeatherMs } = readEnvironmentTimeoutConfig();
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), OPENWEATHER_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), openWeatherMs);
 
   let response;
   try {
@@ -32,7 +57,7 @@ async function fetchJson(url) {
     });
   } catch (error) {
     if (error.name === 'AbortError') {
-      throw new Error(`OpenWeather request timed out after ${OPENWEATHER_TIMEOUT_MS}ms`);
+      throw new Error(`OpenWeather request timed out after ${openWeatherMs}ms`);
     }
 
     throw new Error(`OpenWeather request failed: ${error.message}`);

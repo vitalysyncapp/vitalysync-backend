@@ -13,6 +13,7 @@ import {
   isValidDateString,
   isValidMealType,
   normalizeMealType,
+  readNutritionTimeoutConfig,
 } from '../src/services/nutrition.service.js';
 import {
   buildDeterministicNutritionAssistantNudge,
@@ -96,6 +97,27 @@ test('default calorie goals require valid body metrics', () => {
   assert.throws(
     () => defaultCalorieGoalForProfile({ age: 30, height_cm: 170 }),
     /Valid weight_kg is required/
+  );
+});
+
+test('nutrition service timeout config uses defaults and validates overrides', () => {
+  assert.deepEqual(readNutritionTimeoutConfig({}), {
+    usdaMs: 20000,
+    openAiMs: 75000,
+  });
+  assert.deepEqual(
+    readNutritionTimeoutConfig({
+      USDA_TIMEOUT_MS: '25000',
+      OPENAI_NUTRITION_TIMEOUT_MS: '90000',
+    }),
+    {
+      usdaMs: 25000,
+      openAiMs: 90000,
+    }
+  );
+  assert.throws(
+    () => readNutritionTimeoutConfig({ USDA_TIMEOUT_MS: '0' }),
+    /USDA_TIMEOUT_MS must be a positive integer/
   );
 });
 

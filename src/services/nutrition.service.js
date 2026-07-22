@@ -4,6 +4,8 @@ import OpenAI from 'openai';
 const ALLOWED_MEAL_TYPES = new Set(['breakfast', 'lunch', 'dinner', 'snack']);
 const USDA_SEARCH_URL = 'https://api.nal.usda.gov/fdc/v1/foods/search';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+const DEFAULT_USDA_TIMEOUT_MS = 20000;
+const DEFAULT_OPENAI_TIMEOUT_MS = 75000;
 const NUTRITION_CALORIE_GOAL_TYPE = 'nutrition_calories';
 const NUTRITION_CALORIE_GOAL_UNIT = 'kcal';
 const NUTRITION_CALORIE_GOAL_SOURCE = 'system_default';
@@ -31,6 +33,35 @@ const PROFILE_ACTIVITY_LEVELS = Object.freeze({
 });
 
 let openaiClient = null;
+
+function readPositiveInteger(value, fallback, name) {
+  const raw = value == null ? '' : String(value).trim();
+  if (raw === '') {
+    return fallback;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+
+  return parsed;
+}
+
+export function readNutritionTimeoutConfig(env = process.env) {
+  return Object.freeze({
+    usdaMs: readPositiveInteger(
+      env.USDA_TIMEOUT_MS,
+      DEFAULT_USDA_TIMEOUT_MS,
+      'USDA_TIMEOUT_MS'
+    ),
+    openAiMs: readPositiveInteger(
+      env.OPENAI_NUTRITION_TIMEOUT_MS,
+      DEFAULT_OPENAI_TIMEOUT_MS,
+      'OPENAI_NUTRITION_TIMEOUT_MS'
+    ),
+  });
+}
 
 function normalizedNumber(value) {
   const parsed = Number(value);
@@ -252,8 +283,10 @@ function getOpenAIClient() {
   }
 
   if (!openaiClient) {
+    const { openAiMs } = readNutritionTimeoutConfig();
     openaiClient = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
+      timeout: openAiMs,
     });
   }
 
@@ -398,13 +431,14 @@ export async function searchUsdaFood(food) {
     throw new Error('USDA_API_KEY is not configured');
   }
 
+  const { usdaMs } = readNutritionTimeoutConfig();
   const response = await axios.get(USDA_SEARCH_URL, {
     params: {
       api_key: process.env.USDA_API_KEY,
       query: food.food_name,
       pageSize: 1,
     },
-    timeout: 12000,
+    timeout: usdaMs,
   });
 
   const bestMatch = response.data?.foods?.[0] ?? null;
