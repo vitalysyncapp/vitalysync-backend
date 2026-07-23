@@ -34,6 +34,7 @@ app.use(attachRequestContext);
 app.use(helmet());
 app.use(cors(createCorsOptions()));
 app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: false, limit: '10kb' }));
 
 app.get('/api/health', (_req, res) => {
   res.status(200).json({

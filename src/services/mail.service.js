@@ -108,6 +108,35 @@ async function sendVerificationEmail({ to, username, verificationUrl }) {
   });
 }
 
+async function sendPasswordResetEmail({ to, username, passwordResetUrl }) {
+  const displayName = String(username ?? '').trim() || 'there';
+  const subject = 'Reset your VitalySync password';
+  const text = [
+    `Hi ${displayName},`,
+    '',
+    'Use this link to reset your VitalySync password:',
+    passwordResetUrl,
+    '',
+    'This link expires soon and can only be used once.',
+    'If you did not request a password reset, you can ignore this email.',
+  ].join('\n');
+  const html = `
+    <p>Hi ${escapeHtml(displayName)},</p>
+    <p>Use this link to reset your VitalySync password.</p>
+    <p><a href="${escapeHtml(passwordResetUrl)}">Reset password</a></p>
+    <p>This link expires soon and can only be used once.</p>
+    <p>If you did not request a password reset, you can ignore this email.</p>
+  `;
+
+  return sendMail({
+    to,
+    subject,
+    text,
+    html,
+  });
+}
+
 export const mailService = {
   sendVerificationEmail,
+  sendPasswordResetEmail,
 };

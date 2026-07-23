@@ -5,9 +5,12 @@ import { createAccessToken } from '../services/authToken.service.js';
 import {
   consumeEmailVerificationToken,
   createEmailVerificationToken,
+  createPasswordResetToken,
+  resetPasswordWithToken,
 } from '../services/authEmailToken.service.js';
 import {
   normalizeEmail,
+  validateEmailSyntax,
   validateEmailAddress,
 } from '../services/emailValidation.service.js';
 import { mailService } from '../services/mail.service.js';
@@ -19,6 +22,10 @@ const AUTH_SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
 const ALLOWED_GENDERS = new Set(['Male', 'Female', 'Other']);
 const RESEND_VERIFICATION_MESSAGE =
   'If this email belongs to an unverified VitalySync account, a verification link has been sent.';
+const PASSWORD_RESET_REQUEST_MESSAGE =
+  'If this email belongs to a VitalySync account, a password reset link has been sent.';
+const PASSWORD_RESET_SUCCESS_MESSAGE =
+  'Password reset successfully. You can return to VitalySync and sign in.';
 
 function normalizeNullableText(value) {
   const trimmed = String(value ?? '').trim();
@@ -50,6 +57,20 @@ function normalizeOptionalGender(value) {
   }
 
   return { value: normalizedGender };
+}
+
+function normalizeResetPassword(value) {
+  const password = String(value ?? '').trim();
+
+  if (!password) {
+    return { error: 'Password is required' };
+  }
+
+  if (password.length < 6) {
+    return { error: 'Password must be at least 6 characters' };
+  }
+
+  return { value: password };
 }
 
 async function getAuthSchemaSupport() {
@@ -169,7 +190,7 @@ async function getAuthSchemaSupport() {
     has_gender: false,
     has_email_verified: false,
     has_email_verified_at: false,
-    has_auth_email_tokens: false
+    has_auth_email_tokens: false,
   };
   authSchemaSupportFetchedAt = now;
 
@@ -203,6 +224,15 @@ function buildEmailVerificationUrl(req, token) {
   return url.toString();
 }
 
+function buildPasswordResetUrl(req, token) {
+  const url = new URL(
+    '/api/auth/password-reset/confirm',
+    getPublicApiBaseUrl(req)
+  );
+  url.searchParams.set('token', token);
+  return url.toString();
+}
+
 async function sendVerificationEmailForUser(req, user) {
   const token = await createEmailVerificationToken({
     userId: user.user_id,
@@ -213,6 +243,19 @@ async function sendVerificationEmailForUser(req, user) {
     to: user.email,
     username: user.username,
     verificationUrl: buildEmailVerificationUrl(req, token.token),
+  });
+}
+
+async function sendPasswordResetEmailForUser(req, user) {
+  const token = await createPasswordResetToken({
+    userId: user.user_id,
+    email: user.email,
+  });
+
+  await mailService.sendPasswordResetEmail({
+    to: user.email,
+    username: user.username,
+    passwordResetUrl: buildPasswordResetUrl(req, token.token),
   });
 }
 
@@ -230,6 +273,16 @@ function queueVerificationEmail(req, user, schema) {
   });
 }
 
+function queuePasswordResetEmail(req, user, schema) {
+  if (schema.has_auth_email_tokens !== true) {
+    return;
+  }
+
+  sendPasswordResetEmailForUser(req, user).catch((error) => {
+    logApiError(req, 'Password reset send error', error);
+  });
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replaceAll('&', '&amp;')
@@ -239,12 +292,17 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
-function sendVerificationResult(req, res, { status, message }) {
-  const acceptsJson =
+function acceptsJson(req) {
+  return (
     typeof req.accepts === 'function' &&
-    req.accepts(['html', 'json']) === 'json';
+    req.accepts(['html', 'json']) === 'json'
+  );
+}
 
-  if (acceptsJson) {
+function sendVerificationResult(req, res, { status, message }) {
+  const shouldSendJson = acceptsJson(req);
+
+  if (shouldSendJson) {
     return res.status(status).json({ message });
   }
 
@@ -291,26 +349,172 @@ function sendVerificationResult(req, res, { status, message }) {
 </html>`);
 }
 
+function passwordResetFormHtml({ token, message, isError = false }) {
+  const safeToken = escapeHtml(token);
+  const safeMessage = escapeHtml(message);
+  const messageColor = isError ? '#b42318' : '#315a66';
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VitalySync Password Reset</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: Arial, sans-serif;
+        background: #f4fbf8;
+        color: #17324d;
+      }
+      main {
+        width: min(92vw, 440px);
+        padding: 28px;
+        border: 1px solid #cfe8df;
+        border-radius: 16px;
+        background: white;
+        box-shadow: 0 16px 44px rgba(17, 40, 65, 0.12);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 24px;
+      }
+      p {
+        margin: 0 0 18px;
+        line-height: 1.5;
+        color: ${messageColor};
+      }
+      label {
+        display: block;
+        margin: 12px 0 6px;
+        font-weight: 700;
+      }
+      input {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 12px;
+        border: 1px solid #cfe8df;
+        border-radius: 10px;
+        font-size: 16px;
+      }
+      button {
+        width: 100%;
+        margin-top: 18px;
+        padding: 13px 16px;
+        border: 0;
+        border-radius: 10px;
+        background: #1e8f83;
+        color: white;
+        font-size: 16px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Reset your password</h1>
+      <p>${safeMessage}</p>
+      <form method="post" action="/api/auth/password-reset/confirm">
+        <input type="hidden" name="token" value="${safeToken}">
+        <label for="password">New password</label>
+        <input id="password" name="password" type="password" minlength="6" autocomplete="new-password" required>
+        <label for="confirm_password">Confirm password</label>
+        <input id="confirm_password" name="confirm_password" type="password" minlength="6" autocomplete="new-password" required>
+        <button type="submit">Reset password</button>
+      </form>
+    </main>
+  </body>
+</html>`;
+}
+
+function passwordResetResultHtml(message) {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VitalySync Password Reset</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: Arial, sans-serif;
+        background: #f4fbf8;
+        color: #17324d;
+      }
+      main {
+        width: min(92vw, 440px);
+        padding: 28px;
+        border: 1px solid #cfe8df;
+        border-radius: 16px;
+        background: white;
+        box-shadow: 0 16px 44px rgba(17, 40, 65, 0.12);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 24px;
+      }
+      p {
+        margin: 0;
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>VitalySync</h1>
+      <p>${escapeHtml(message)}</p>
+    </main>
+  </body>
+</html>`;
+}
+
+function sendPasswordResetResult(req, res, { status, message, token = '', showForm = false, isError = false }) {
+  if (acceptsJson(req)) {
+    return res.status(status).json({ message });
+  }
+
+  if (showForm) {
+    return res.status(status).type('html').send(
+      passwordResetFormHtml({
+        token,
+        message,
+        isError,
+      }),
+    );
+  }
+
+  return res.status(status).type('html').send(passwordResetResultHtml(message));
+}
+
 async function ensureUserStreak(userId) {
   await pool.query(
     `INSERT INTO user_streaks (user_id)
      VALUES ($1)
      ON CONFLICT (user_id) DO NOTHING`,
-    [userId]
+    [userId],
   );
 
   const streakResult = await pool.query(
     `SELECT current_streak, longest_streak, last_logged_date
      FROM user_streaks
      WHERE user_id = $1`,
-    [userId]
+    [userId],
   );
 
-  return streakResult.rows[0] ?? {
-    current_streak: 0,
-    longest_streak: 0,
-    last_logged_date: null
-  };
+  return (
+    streakResult.rows[0] ?? {
+      current_streak: 0,
+      longest_streak: 0,
+      last_logged_date: null,
+    }
+  );
 }
 
 function formatUserPayload(user) {
@@ -319,8 +523,7 @@ function formatUserPayload(user) {
   const normalizedGender = normalizeNullableText(user.gender);
   const normalizedLifestyleType = normalizeNullableText(user.lifestyle_type);
   const normalizedWellnessGoal = normalizeNullableText(user.wellness_goal);
-  const age =
-    user.age == null ? null : Number.parseInt(String(user.age), 10);
+  const age = user.age == null ? null : Number.parseInt(String(user.age), 10);
 
   return {
     user_id: user.user_id,
@@ -333,21 +536,13 @@ function formatUserPayload(user) {
     role: normalizedRole ?? normalizedUserType,
     lifestyle_type: normalizedLifestyleType,
     wellness_goal: normalizedWellnessGoal,
-    onboarding_completed:
-      user.onboarding_completed == true &&
-      user.has_onboarding_profile == true
+    onboarding_completed: user.onboarding_completed == true && user.has_onboarding_profile == true,
   };
 }
 
 export async function signup(req, res) {
   try {
-    const {
-      username,
-      email,
-      password,
-      age,
-      gender
-    } = req.body;
+    const { username, email, password, age, gender } = req.body;
     const normalizedUsername = String(username ?? '').trim();
     const normalizedEmail = normalizeEmail(email);
     const normalizedPassword = String(password ?? '').trim();
@@ -363,15 +558,9 @@ export async function signup(req, res) {
     }
 
     // Validate required fields
-    if (
-      !normalizedUsername ||
-      !normalizedEmail ||
-      !normalizedPassword ||
-      normalizedAge.value == null ||
-      normalizedGender.value == null
-    ) {
+    if (!normalizedUsername || !normalizedEmail || !normalizedPassword || normalizedAge.value == null || normalizedGender.value == null) {
       return res.status(400).json({
-        message: 'Username, email, password, age, and gender are required'
+        message: 'Username, email, password, age, and gender are required',
       });
     }
 
@@ -381,10 +570,7 @@ export async function signup(req, res) {
     }
 
     // Check if email or username already exists
-    const userCheck = await pool.query(
-      'SELECT * FROM users WHERE LOWER(email) = $1 OR username = $2',
-      [emailValidation.email, normalizedUsername]
-    );
+    const userCheck = await pool.query('SELECT * FROM users WHERE LOWER(email) = $1 OR username = $2', [emailValidation.email, normalizedUsername]);
     if (userCheck.rows.length > 0) {
       return res.status(400).json({ message: 'Email or username already exists' });
     }
@@ -393,11 +579,7 @@ export async function signup(req, res) {
     const hashedPassword = await bcrypt.hash(normalizedPassword, 10);
     const schema = await getAuthSchemaSupport();
     const insertColumns = ['username', 'email', 'password'];
-    const insertValues = [
-      normalizedUsername,
-      emailValidation.email,
-      hashedPassword
-    ];
+    const insertValues = [normalizedUsername, emailValidation.email, hashedPassword];
 
     if (schema.has_age) {
       insertColumns.push('age');
@@ -409,21 +591,13 @@ export async function signup(req, res) {
       insertValues.push(normalizedGender.value);
     }
 
-    const valuePlaceholders = insertColumns
-      .map((_, index) => `$${index + 1}`)
-      .join(', ');
+    const valuePlaceholders = insertColumns.map((_, index) => `$${index + 1}`).join(', ');
     const ageSelect = schema.has_age ? 'age' : 'NULL::INTEGER AS age';
     const genderSelect = schema.has_gender ? 'gender' : 'NULL::TEXT AS gender';
     const roleSelect = schema.has_role ? 'role' : 'NULL::TEXT AS role';
-    const lifestyleSelect = schema.has_lifestyle_type
-      ? 'lifestyle_type'
-      : 'NULL::TEXT AS lifestyle_type';
-    const wellnessGoalSelect = schema.has_wellness_goal
-      ? 'wellness_goal'
-      : 'NULL::TEXT AS wellness_goal';
-    const emailVerifiedSelect = schema.has_email_verified
-      ? 'email_verified'
-      : 'FALSE AS email_verified';
+    const lifestyleSelect = schema.has_lifestyle_type ? 'lifestyle_type' : 'NULL::TEXT AS lifestyle_type';
+    const wellnessGoalSelect = schema.has_wellness_goal ? 'wellness_goal' : 'NULL::TEXT AS wellness_goal';
+    const emailVerifiedSelect = schema.has_email_verified ? 'email_verified' : 'FALSE AS email_verified';
 
     // Insert user
     const signupQuery = `INSERT INTO users
@@ -453,9 +627,8 @@ export async function signup(req, res) {
       message: 'User created successfully',
       user: formatUserPayload(newUser.rows[0]),
       streak,
-      ...token
+      ...token,
     });
-
   } catch (err) {
     logApiError(req, 'Signup error', err);
     res.status(500).json({
@@ -470,22 +643,15 @@ export async function login(req, res) {
     const normalizedEmail = normalizeEmail(email);
     const normalizedPassword = String(password ?? '').trim();
 
-    if (!normalizedEmail || !normalizedPassword)
-      return res.status(400).json({ message: 'Email and password required' });
+    if (!normalizedEmail || !normalizedPassword) return res.status(400).json({ message: 'Email and password required' });
 
     const schema = await getAuthSchemaSupport();
     const ageSelect = schema.has_age ? 'users.age' : 'NULL::INTEGER AS age';
     const genderSelect = schema.has_gender ? 'users.gender' : 'NULL::TEXT AS gender';
     const userRoleSelect = schema.has_role ? 'users.role' : 'NULL::TEXT';
-    const userLifestyleSelect = schema.has_lifestyle_type
-      ? 'users.lifestyle_type'
-      : 'NULL::TEXT';
-    const userWellnessSelect = schema.has_wellness_goal
-      ? 'users.wellness_goal'
-      : 'NULL::TEXT';
-    const emailVerifiedSelect = schema.has_email_verified
-      ? 'users.email_verified'
-      : 'FALSE AS email_verified';
+    const userLifestyleSelect = schema.has_lifestyle_type ? 'users.lifestyle_type' : 'NULL::TEXT';
+    const userWellnessSelect = schema.has_wellness_goal ? 'users.wellness_goal' : 'NULL::TEXT';
+    const emailVerifiedSelect = schema.has_email_verified ? 'users.email_verified' : 'FALSE AS email_verified';
     const profileJoin = schema.has_user_onboarding_profiles
       ? `LEFT JOIN user_onboarding_profiles onboarding_profile
            ON onboarding_profile.user_id = users.user_id`
@@ -494,18 +660,10 @@ export async function login(req, res) {
       ? `LEFT JOIN user_onboarding onboarding
            ON onboarding.user_id = users.user_id`
       : '';
-    const profileRoleSelect = schema.has_user_onboarding_profiles
-      ? 'onboarding_profile.role'
-      : 'NULL::TEXT';
-    const profileLifestyleSelect = schema.has_user_onboarding_profiles
-      ? 'onboarding_profile.lifestyle_type'
-      : 'NULL::TEXT';
-    const profileWellnessSelect = schema.has_user_onboarding_profiles
-      ? 'onboarding_profile.wellness_goal'
-      : 'NULL::TEXT';
-    const legacyRoleSelect = schema.has_user_onboarding
-      ? 'onboarding.role_type'
-      : 'NULL::TEXT';
+    const profileRoleSelect = schema.has_user_onboarding_profiles ? 'onboarding_profile.role' : 'NULL::TEXT';
+    const profileLifestyleSelect = schema.has_user_onboarding_profiles ? 'onboarding_profile.lifestyle_type' : 'NULL::TEXT';
+    const profileWellnessSelect = schema.has_user_onboarding_profiles ? 'onboarding_profile.wellness_goal' : 'NULL::TEXT';
+    const legacyRoleSelect = schema.has_user_onboarding ? 'onboarding.role_type' : 'NULL::TEXT';
     const hasProfileQuery = schema.has_user_onboarding_profiles
       ? `EXISTS (
            SELECT 1
@@ -535,7 +693,7 @@ export async function login(req, res) {
     const user = userQuery.rows[0];
 
     if (!user) return res.status(401).json({ message: 'Invalid credentials' });
-    
+
     const validPassword = await bcrypt.compare(normalizedPassword, user.password);
     if (!validPassword) return res.status(401).json({ message: 'Invalid credentials' });
 
@@ -547,7 +705,7 @@ export async function login(req, res) {
       message: 'Login successful',
       user: formatUserPayload(user),
       streak,
-      ...token
+      ...token,
     });
   } catch (err) {
     logApiError(req, 'Login error', err);
@@ -559,14 +717,7 @@ export async function login(req, res) {
 
 export async function updateProfile(req, res) {
   try {
-    const {
-      user_id,
-      username,
-      email,
-      age,
-      gender,
-      user_type = null
-    } = req.body;
+    const { user_id, username, email, age, gender, user_type = null } = req.body;
     const normalizedUsername = String(username ?? '').trim();
     const normalizedEmail = normalizeEmail(email);
     const normalizedUserType = normalizeNullableText(user_type);
@@ -578,7 +729,7 @@ export async function updateProfile(req, res) {
 
     if (!effectiveUserId || !normalizedUsername || !normalizedEmail) {
       return res.status(400).json({
-        message: 'User ID, username, and email are required'
+        message: 'User ID, username, and email are required',
       });
     }
 
@@ -596,15 +747,13 @@ export async function updateProfile(req, res) {
     }
 
     const schema = await getAuthSchemaSupport();
-    const existingEmailVerifiedSelect = schema.has_email_verified
-      ? 'email_verified'
-      : 'FALSE AS email_verified';
+    const existingEmailVerifiedSelect = schema.has_email_verified ? 'email_verified' : 'FALSE AS email_verified';
 
     const existingUser = await pool.query(
       `SELECT user_id, email, ${existingEmailVerifiedSelect}
        FROM users
        WHERE user_id = $1`,
-      [effectiveUserId]
+      [effectiveUserId],
     );
 
     if (existingUser.rows.length === 0) {
@@ -612,19 +761,18 @@ export async function updateProfile(req, res) {
     }
 
     const currentUser = existingUser.rows[0];
-    const emailChanged =
-      normalizeEmail(currentUser.email) !== emailValidation.email;
+    const emailChanged = normalizeEmail(currentUser.email) !== emailValidation.email;
 
     const duplicateUser = await pool.query(
       `SELECT user_id
        FROM users
        WHERE (LOWER(email) = $1 OR username = $2) AND user_id <> $3`,
-      [emailValidation.email, normalizedUsername, effectiveUserId]
+      [emailValidation.email, normalizedUsername, effectiveUserId],
     );
 
     if (duplicateUser.rows.length > 0) {
       return res.status(400).json({
-        message: 'Email or username already exists'
+        message: 'Email or username already exists',
       });
     }
 
@@ -658,15 +806,9 @@ export async function updateProfile(req, res) {
     const ageSelect = schema.has_age ? 'age' : 'NULL::INTEGER AS age';
     const genderSelect = schema.has_gender ? 'gender' : 'NULL::TEXT AS gender';
     const roleSelect = schema.has_role ? 'role' : 'NULL::TEXT AS role';
-    const lifestyleSelect = schema.has_lifestyle_type
-      ? 'lifestyle_type'
-      : 'NULL::TEXT AS lifestyle_type';
-    const wellnessGoalSelect = schema.has_wellness_goal
-      ? 'wellness_goal'
-      : 'NULL::TEXT AS wellness_goal';
-    const emailVerifiedSelect = schema.has_email_verified
-      ? 'email_verified'
-      : 'FALSE AS email_verified';
+    const lifestyleSelect = schema.has_lifestyle_type ? 'lifestyle_type' : 'NULL::TEXT AS lifestyle_type';
+    const wellnessGoalSelect = schema.has_wellness_goal ? 'wellness_goal' : 'NULL::TEXT AS wellness_goal';
+    const emailVerifiedSelect = schema.has_email_verified ? 'email_verified' : 'FALSE AS email_verified';
 
     const updateQuery = `UPDATE users
          SET ${updateAssignments.join(', ')}
@@ -693,7 +835,7 @@ export async function updateProfile(req, res) {
          SET role = $2,
              updated_at = CURRENT_TIMESTAMP
          WHERE user_id = $1`,
-        [effectiveUserId, normalizedUserType]
+        [effectiveUserId, normalizedUserType],
       );
     }
 
@@ -704,7 +846,7 @@ export async function updateProfile(req, res) {
          ON CONFLICT (user_id) DO UPDATE SET
            role_type = EXCLUDED.role_type,
            updated_at = NOW()`,
-        [effectiveUserId, normalizedUserType]
+        [effectiveUserId, normalizedUserType],
       );
     }
 
@@ -713,7 +855,7 @@ export async function updateProfile(req, res) {
           `SELECT role_type AS user_type
            FROM user_onboarding
            WHERE user_id = $1`,
-          [effectiveUserId]
+          [effectiveUserId],
         )
       : { rows: [] };
     const profileResult = schema.has_user_onboarding_profiles
@@ -723,7 +865,7 @@ export async function updateProfile(req, res) {
              FROM user_onboarding_profiles
              WHERE user_id = $1
            ) AS has_onboarding_profile`,
-          [effectiveUserId]
+          [effectiveUserId],
         )
       : { rows: [{ has_onboarding_profile: false }] };
 
@@ -731,14 +873,9 @@ export async function updateProfile(req, res) {
       message: 'Profile updated successfully',
       user: formatUserPayload({
         ...updatedUser.rows[0],
-        user_type:
-          normalizedUserType ??
-          updatedUser.rows[0]?.role ??
-          roleResult.rows[0]?.user_type ??
-          null,
-        has_onboarding_profile:
-          profileResult.rows[0]?.has_onboarding_profile == true
-      })
+        user_type: normalizedUserType ?? updatedUser.rows[0]?.role ?? roleResult.rows[0]?.user_type ?? null,
+        has_onboarding_profile: profileResult.rows[0]?.has_onboarding_profile == true,
+      }),
     });
   } catch (err) {
     logApiError(req, 'Profile update error', err);
@@ -753,16 +890,12 @@ export async function resendEmailVerification(req, res) {
     const normalizedEmail = normalizeEmail(req.body?.email);
     const schema = await getAuthSchemaSupport();
 
-    if (
-      normalizedEmail &&
-      schema.has_auth_email_tokens === true &&
-      schema.has_email_verified === true
-    ) {
+    if (normalizedEmail && schema.has_auth_email_tokens === true && schema.has_email_verified === true) {
       const userResult = await pool.query(
         `SELECT user_id, username, email, email_verified
          FROM users
          WHERE LOWER(email) = $1`,
-        [normalizedEmail]
+        [normalizedEmail],
       );
       const user = userResult.rows[0];
 
@@ -802,6 +935,130 @@ export async function confirmEmailVerification(req, res) {
     return sendVerificationResult(req, res, {
       status: 500,
       message: 'Unable to verify this email right now.',
+    });
+  }
+}
+
+export async function requestPasswordReset(req, res) {
+  try {
+    const normalizedEmail = normalizeEmail(req.body?.email);
+
+    if (!normalizedEmail) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+
+    const emailSyntax = validateEmailSyntax(normalizedEmail);
+    if (emailSyntax.error) {
+      return res.status(400).json({ message: emailSyntax.error });
+    }
+
+    const schema = await getAuthSchemaSupport();
+
+    if (schema.has_auth_email_tokens === true) {
+      const userResult = await pool.query(
+        `SELECT user_id, username, email
+         FROM users
+         WHERE LOWER(email) = $1`,
+        [normalizedEmail],
+      );
+      const user = userResult.rows[0];
+
+      if (user) {
+        queuePasswordResetEmail(req, user, schema);
+      }
+    }
+
+    return res.status(200).json({
+      message: PASSWORD_RESET_REQUEST_MESSAGE,
+    });
+  } catch (err) {
+    logApiError(req, 'Request password reset error', err);
+    return res.status(500).json({
+      message: 'Unable to send password reset email right now',
+    });
+  }
+}
+
+export async function showPasswordResetForm(req, res) {
+  const token = String(req.query?.token ?? '').trim();
+
+  if (!token) {
+    return sendPasswordResetResult(req, res, {
+      status: 400,
+      message: 'Password reset token is required.',
+      isError: true,
+    });
+  }
+
+  return sendPasswordResetResult(req, res, {
+    status: 200,
+    message: 'Choose a new password for your VitalySync account.',
+    token,
+    showForm: true,
+  });
+}
+
+export async function confirmPasswordReset(req, res) {
+  const token = String(req.body?.token ?? req.query?.token ?? '').trim();
+  const normalizedPassword = normalizeResetPassword(req.body?.password);
+  const confirmPassword = String(req.body?.confirm_password ?? '').trim();
+  const hasConfirmPassword = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'confirm_password');
+
+  if (!token) {
+    return sendPasswordResetResult(req, res, {
+      status: 400,
+      message: 'Password reset token is required.',
+      isError: true,
+    });
+  }
+
+  if (normalizedPassword.error) {
+    return sendPasswordResetResult(req, res, {
+      status: 400,
+      message: normalizedPassword.error,
+      token,
+      showForm: true,
+      isError: true,
+    });
+  }
+
+  if (hasConfirmPassword && confirmPassword !== normalizedPassword.value) {
+    return sendPasswordResetResult(req, res, {
+      status: 400,
+      message: 'Passwords do not match.',
+      token,
+      showForm: true,
+      isError: true,
+    });
+  }
+
+  try {
+    const passwordHash = await bcrypt.hash(normalizedPassword.value, 10);
+    const result = await resetPasswordWithToken({
+      token,
+      passwordHash,
+    });
+
+    if (result.error) {
+      return sendPasswordResetResult(req, res, {
+        status: 400,
+        message: result.error,
+        isError: true,
+      });
+    }
+
+    return sendPasswordResetResult(req, res, {
+      status: 200,
+      message: PASSWORD_RESET_SUCCESS_MESSAGE,
+    });
+  } catch (err) {
+    logApiError(req, 'Confirm password reset error', err);
+    return sendPasswordResetResult(req, res, {
+      status: 500,
+      message: 'Unable to reset this password right now.',
+      token,
+      showForm: true,
+      isError: true,
     });
   }
 }
@@ -859,29 +1116,29 @@ async function getAccountDeletionSupport(client) {
       ) AS has_user_environment_snapshots
   `);
 
-  return result.rows[0] ?? {
-    has_daily_logs: false,
-    has_daily_activity_logs: false,
-    has_daily_exercise_goals: false,
-    has_user_streaks: false,
-    has_user_busy_days: false,
-    has_user_preferences: false,
-    has_user_onboarding: false,
-    has_user_onboarding_profiles: false,
-    has_user_onboarding_answers: false,
-    has_user_environment_snapshots: false
-  };
+  return (
+    result.rows[0] ?? {
+      has_daily_logs: false,
+      has_daily_activity_logs: false,
+      has_daily_exercise_goals: false,
+      has_user_streaks: false,
+      has_user_busy_days: false,
+      has_user_preferences: false,
+      has_user_onboarding: false,
+      has_user_onboarding_profiles: false,
+      has_user_onboarding_answers: false,
+      has_user_environment_snapshots: false,
+    }
+  );
 }
 
 export async function deleteAccount(req, res) {
-  const {
-    user_id: rawUserId,
-    email,
-    password
-  } = req.body;
+  const { user_id: rawUserId, email, password } = req.body;
 
   const userId = getAuthenticatedUserId(req) ?? Number(rawUserId);
-  const normalizedEmail = String(email ?? '').trim().toLowerCase();
+  const normalizedEmail = String(email ?? '')
+    .trim()
+    .toLowerCase();
   const normalizedPassword = String(password ?? '').trim();
 
   if (!Number.isInteger(userId) || userId <= 0) {
@@ -901,7 +1158,7 @@ export async function deleteAccount(req, res) {
       `SELECT user_id, email, password
        FROM users
        WHERE user_id = $1`,
-      [userId]
+      [userId],
     );
 
     const user = userResult.rows[0];
@@ -911,7 +1168,11 @@ export async function deleteAccount(req, res) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    if (String(user.email ?? '').trim().toLowerCase() !== normalizedEmail) {
+    if (
+      String(user.email ?? '')
+        .trim()
+        .toLowerCase() !== normalizedEmail
+    ) {
       await client.query('ROLLBACK');
       return res.status(401).json({ message: 'Invalid credentials' });
     }
@@ -925,84 +1186,51 @@ export async function deleteAccount(req, res) {
     const schema = await getAccountDeletionSupport(client);
 
     if (schema.has_user_environment_snapshots) {
-      await client.query(
-        'DELETE FROM user_environment_snapshots WHERE user_id = $1',
-        [userId]
-      );
+      await client.query('DELETE FROM user_environment_snapshots WHERE user_id = $1', [userId]);
     }
 
     if (schema.has_daily_logs) {
-      await client.query(
-        'DELETE FROM daily_logs WHERE user_id = $1',
-        [userId]
-      );
+      await client.query('DELETE FROM daily_logs WHERE user_id = $1', [userId]);
     }
 
     if (schema.has_daily_activity_logs) {
-      await client.query(
-        'DELETE FROM daily_activity_logs WHERE user_id = $1',
-        [userId]
-      );
+      await client.query('DELETE FROM daily_activity_logs WHERE user_id = $1', [userId]);
     }
 
     if (schema.has_daily_exercise_goals) {
-      await client.query(
-        'DELETE FROM daily_exercise_goals WHERE user_id = $1',
-        [userId]
-      );
+      await client.query('DELETE FROM daily_exercise_goals WHERE user_id = $1', [userId]);
     }
 
     if (schema.has_user_streaks) {
-      await client.query(
-        'DELETE FROM user_streaks WHERE user_id = $1',
-        [userId]
-      );
+      await client.query('DELETE FROM user_streaks WHERE user_id = $1', [userId]);
     }
 
     if (schema.has_user_busy_days) {
-      await client.query(
-        'DELETE FROM user_busy_days WHERE user_id = $1',
-        [userId]
-      );
+      await client.query('DELETE FROM user_busy_days WHERE user_id = $1', [userId]);
     }
 
     if (schema.has_user_preferences) {
-      await client.query(
-        'DELETE FROM user_preferences WHERE user_id = $1',
-        [userId]
-      );
+      await client.query('DELETE FROM user_preferences WHERE user_id = $1', [userId]);
     }
 
     if (schema.has_user_onboarding) {
-      await client.query(
-        'DELETE FROM user_onboarding WHERE user_id = $1',
-        [userId]
-      );
+      await client.query('DELETE FROM user_onboarding WHERE user_id = $1', [userId]);
     }
 
     if (schema.has_user_onboarding_answers) {
-      await client.query(
-        'DELETE FROM user_onboarding_answers WHERE user_id = $1',
-        [userId]
-      );
+      await client.query('DELETE FROM user_onboarding_answers WHERE user_id = $1', [userId]);
     }
 
     if (schema.has_user_onboarding_profiles) {
-      await client.query(
-        'DELETE FROM user_onboarding_profiles WHERE user_id = $1',
-        [userId]
-      );
+      await client.query('DELETE FROM user_onboarding_profiles WHERE user_id = $1', [userId]);
     }
 
-    await client.query(
-      'DELETE FROM users WHERE user_id = $1',
-      [userId]
-    );
+    await client.query('DELETE FROM users WHERE user_id = $1', [userId]);
 
     await client.query('COMMIT');
 
     return res.status(200).json({
-      message: 'Account deleted successfully'
+      message: 'Account deleted successfully',
     });
   } catch (err) {
     await client.query('ROLLBACK');

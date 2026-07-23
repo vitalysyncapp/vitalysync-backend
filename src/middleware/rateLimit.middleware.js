@@ -145,6 +145,11 @@ export function createRateLimiters(config = rateLimitConfig) {
       policy: config.emailVerification,
       keyGenerator: loginIdentityKey,
     }),
+    passwordReset: createLimiter({
+      identifier: 'password-reset',
+      policy: config.passwordReset,
+      keyGenerator: loginIdentityKey,
+    }),
     nutritionAnalysis: createLimiter({
       identifier: 'nutrition-analysis',
       policy: config.nutritionAnalysis,

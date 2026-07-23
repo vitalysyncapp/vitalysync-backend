@@ -6,7 +6,9 @@ import {
   AUTH_EMAIL_TOKEN_TYPES,
   consumeEmailVerificationToken,
   createEmailVerificationToken,
+  createPasswordResetToken,
   hashEmailToken,
+  resetPasswordWithToken,
 } from '../src/services/authEmailToken.service.js';
 
 function createFakeDb(handler) {
@@ -92,6 +94,83 @@ test('email verification rejects missing, expired, or already used tokens', asyn
 
   assert.deepEqual(expiredResult, {
     error: AUTH_EMAIL_TOKEN_MESSAGES.invalidVerificationToken,
+  });
+  assert.equal(db.calls.length, 1);
+});
+
+test('password reset tokens are hashed and stored with expiry', async () => {
+  const now = new Date('2026-07-23T00:00:00.000Z');
+  const db = createFakeDb(() => ({ rows: [] }));
+
+  const result = await createPasswordResetToken({
+    userId: 7,
+    email: 'Student@Example.COM',
+    db,
+    now,
+  });
+
+  assert.equal(typeof result.token, 'string');
+  assert.ok(result.token.length > 20);
+  assert.equal(result.expiresAt.toISOString(), '2026-07-23T01:00:00.000Z');
+  assert.equal(db.calls.length, 2);
+  assert.match(db.calls[0].sql, /UPDATE auth_email_tokens/);
+  assert.equal(db.calls[0].params[1], AUTH_EMAIL_TOKEN_TYPES.passwordReset);
+  assert.match(db.calls[1].sql, /INSERT INTO auth_email_tokens/);
+  assert.equal(db.calls[1].params[1], 'student@example.com');
+  assert.equal(db.calls[1].params[2], AUTH_EMAIL_TOKEN_TYPES.passwordReset);
+  assert.equal(db.calls[1].params[3], hashEmailToken(result.token));
+});
+
+test('password reset consumes a valid token and updates the password hash', async () => {
+  const rawToken = 'reset-token';
+  const db = createFakeDb((sql) => {
+    if (sql.includes('UPDATE auth_email_tokens')) {
+      return {
+        rows: [{ user_id: 7, email: 'student@example.com' }],
+      };
+    }
+
+    if (sql.includes('UPDATE users')) {
+      return {
+        rows: [{ user_id: 7, email: 'student@example.com' }],
+      };
+    }
+
+    return { rows: [] };
+  });
+
+  const result = await resetPasswordWithToken({
+    token: rawToken,
+    passwordHash: 'hashed-password',
+    db,
+  });
+
+  assert.equal(result.user.email, 'student@example.com');
+  assert.equal(db.calls[0].params[0], hashEmailToken(rawToken));
+  assert.equal(db.calls[0].params[1], AUTH_EMAIL_TOKEN_TYPES.passwordReset);
+  assert.equal(db.calls[1].params[2], 'hashed-password');
+  assert.equal(db.calls.length, 2);
+});
+
+test('password reset rejects missing, expired, or already used tokens', async () => {
+  const emptyResult = await resetPasswordWithToken({
+    token: '',
+    passwordHash: 'hashed-password',
+    db: createFakeDb(() => ({ rows: [] })),
+  });
+  assert.deepEqual(emptyResult, {
+    error: AUTH_EMAIL_TOKEN_MESSAGES.invalidPasswordResetToken,
+  });
+
+  const db = createFakeDb(() => ({ rows: [] }));
+  const expiredResult = await resetPasswordWithToken({
+    token: 'expired-token',
+    passwordHash: 'hashed-password',
+    db,
+  });
+
+  assert.deepEqual(expiredResult, {
+    error: AUTH_EMAIL_TOKEN_MESSAGES.invalidPasswordResetToken,
   });
   assert.equal(db.calls.length, 1);
 });

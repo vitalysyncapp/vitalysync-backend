@@ -6,9 +6,12 @@ import bcrypt from 'bcrypt';
 
 import pool from '../src/config/db.js';
 import {
+  confirmPasswordReset,
   confirmEmailVerification,
   login,
+  requestPasswordReset,
   resendEmailVerification,
+  showPasswordResetForm,
   signup,
   updateProfile,
 } from '../src/controllers/auth.controller.js';
@@ -64,7 +67,7 @@ test('signup validates required account fields before database work', async () =
         password: 'secret123',
       },
     },
-    res
+    res,
   );
 
   assert.equal(res.statusCode, 400);
@@ -91,7 +94,7 @@ test('signup rejects malformed emails before database work', async () => {
           gender: 'Other',
         },
       },
-      res
+      res,
     );
 
     assert.equal(res.statusCode, 400);
@@ -132,7 +135,7 @@ test('signup rejects emails from unverifiable domains before database work', asy
           gender: 'Other',
         },
       },
-      res
+      res,
     );
 
     assert.equal(res.statusCode, 400);
@@ -144,9 +147,7 @@ test('signup rejects emails from unverifiable domains before database work', asy
 });
 
 test('signup normalizes valid email before duplicate lookup', async (t) => {
-  t.mock.method(dns, 'resolveMx', async () => [
-    { exchange: 'mail.example.com', priority: 10 },
-  ]);
+  t.mock.method(dns, 'resolveMx', async () => [{ exchange: 'mail.example.com', priority: 10 }]);
 
   const res = createMockResponse();
   const originalQuery = pool.query;
@@ -169,7 +170,7 @@ test('signup normalizes valid email before duplicate lookup', async (t) => {
           gender: 'Other',
         },
       },
-      res
+      res,
     );
 
     assert.equal(res.statusCode, 400);
@@ -201,7 +202,7 @@ test('profile update rejects malformed emails before database work', async () =>
           user_type: 'Student',
         },
       },
-      res
+      res,
     );
 
     assert.equal(res.statusCode, 400);
@@ -213,9 +214,7 @@ test('profile update rejects malformed emails before database work', async () =>
 });
 
 test('profile email changes reset verification and queue a new email', async (t) => {
-  t.mock.method(dns, 'resolveMx', async () => [
-    { exchange: 'mail.example.com', priority: 10 },
-  ]);
+  t.mock.method(dns, 'resolveMx', async () => [{ exchange: 'mail.example.com', priority: 10 }]);
 
   let sentMail = null;
   t.mock.method(mailService, 'sendVerificationEmail', async (message) => {
@@ -312,7 +311,7 @@ test('profile email changes reset verification and queue a new email', async (t)
         protocol: 'https',
         get: () => 'api.vitalysync.test',
       },
-      res
+      res,
     );
     await new Promise((resolve) => setImmediate(resolve));
 
@@ -404,10 +403,7 @@ test('login allows unverified email accounts and exposes verification state', as
   };
 
   try {
-    await login(
-      { body: { email: 'Student@Example.com', password: 'secret123' } },
-      res
-    );
+    await login({ body: { email: 'Student@Example.com', password: 'secret123' } }, res);
 
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.user.email_verified, false);
@@ -452,14 +448,11 @@ test('email verification confirm consumes a token and returns JSON success', asy
         query: { token },
         accepts: () => 'json',
       },
-      res
+      res,
     );
 
     assert.equal(res.statusCode, 200);
-    assert.equal(
-      res.body.message,
-      'Email verified successfully. You can return to VitalySync.'
-    );
+    assert.equal(res.body.message, 'Email verified successfully. You can return to VitalySync.');
   } finally {
     pool.query = originalQuery;
   }
@@ -480,7 +473,7 @@ test('email verification confirm rejects used or expired tokens', async () => {
         query: { token: 'used-token' },
         accepts: () => 'json',
       },
-      res
+      res,
     );
 
     assert.equal(res.statusCode, 400);
@@ -515,10 +508,7 @@ test('resend email verification returns a generic response for missing users', a
   };
 
   try {
-    await resendEmailVerification(
-      { body: { email: 'missing@example.com' } },
-      res
-    );
+    await resendEmailVerification({ body: { email: 'missing@example.com' } }, res);
 
     assert.equal(res.statusCode, 200);
     assert.match(res.body.message, /verification link has been sent/);
@@ -581,16 +571,212 @@ test('resend email verification queues mail for unverified accounts', async (t) 
         protocol: 'https',
         get: () => 'api.vitalysync.test',
       },
-      res
+      res,
     );
     await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(res.statusCode, 200);
     assert.equal(sentMail.to, 'student@example.com');
-    assert.match(
-      sentMail.verificationUrl,
-      /^https:\/\/api\.vitalysync\.test\/api\/auth\/email-verification\/confirm\?token=/
+    assert.match(sentMail.verificationUrl, /^https:\/\/api\.vitalysync\.test\/api\/auth\/email-verification\/confirm\?token=/);
+  } finally {
+    pool.query = originalQuery;
+  }
+});
+
+test('password reset request returns a generic response for missing users', async () => {
+  const res = createMockResponse();
+  const originalQuery = pool.query;
+
+  pool.query = async (sql, params) => {
+    if (sql.includes('information_schema.columns')) {
+      return {
+        rows: [
+          {
+            has_auth_email_tokens: true,
+          },
+        ],
+      };
+    }
+
+    if (sql.includes('FROM users')) {
+      assert.equal(params[0], 'missing@example.com');
+      return { rows: [] };
+    }
+
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  try {
+    await requestPasswordReset({ body: { email: 'missing@example.com' } }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.match(res.body.message, /password reset link has been sent/);
+  } finally {
+    pool.query = originalQuery;
+  }
+});
+
+test('password reset request queues mail for existing accounts', async (t) => {
+  let sentMail = null;
+  t.mock.method(mailService, 'sendPasswordResetEmail', async (message) => {
+    sentMail = message;
+    return { accepted: [message.to] };
+  });
+
+  const res = createMockResponse();
+  const originalQuery = pool.query;
+
+  pool.query = async (sql, params) => {
+    if (sql.includes('information_schema.columns')) {
+      return {
+        rows: [
+          {
+            has_auth_email_tokens: true,
+          },
+        ],
+      };
+    }
+
+    if (sql.includes('FROM users')) {
+      assert.equal(params[0], 'student@example.com');
+      return {
+        rows: [
+          {
+            user_id: 7,
+            username: 'Student',
+            email: 'student@example.com',
+          },
+        ],
+      };
+    }
+
+    if (sql.includes('UPDATE auth_email_tokens')) {
+      return { rows: [] };
+    }
+
+    if (sql.includes('INSERT INTO auth_email_tokens')) {
+      return { rows: [] };
+    }
+
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  try {
+    await requestPasswordReset(
+      {
+        body: { email: 'Student@Example.com' },
+        protocol: 'https',
+        get: () => 'api.vitalysync.test',
+      },
+      res,
     );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(sentMail.to, 'student@example.com');
+    assert.match(sentMail.passwordResetUrl, /^https:\/\/api\.vitalysync\.test\/api\/auth\/password-reset\/confirm\?token=/);
+  } finally {
+    pool.query = originalQuery;
+  }
+});
+
+test('password reset form returns HTML for emailed links', async () => {
+  const res = {
+    statusCode: 200,
+    contentType: '',
+    body: '',
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    type(value) {
+      this.contentType = value;
+      return this;
+    },
+    send(payload) {
+      this.body = payload;
+      return this;
+    },
+    json(payload) {
+      this.body = payload;
+      return this;
+    },
+  };
+
+  await showPasswordResetForm({ query: { token: 'reset-token' }, accepts: () => 'html' }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.contentType, 'html');
+  assert.match(res.body, /Reset your password/);
+  assert.match(res.body, /name="token" value="reset-token"/);
+});
+
+test('password reset confirm consumes token and updates password', async () => {
+  const res = createMockResponse();
+  const originalQuery = pool.query;
+
+  pool.query = async (sql, params) => {
+    if (sql.includes('UPDATE auth_email_tokens')) {
+      assert.equal(params[0], hashEmailToken('reset-token'));
+      assert.equal(params[1], 'password_reset');
+      return {
+        rows: [{ user_id: 7, email: 'student@example.com' }],
+      };
+    }
+
+    if (sql.includes('UPDATE users')) {
+      assert.equal(params[0], 7);
+      assert.equal(params[1], 'student@example.com');
+      assert.equal(await bcrypt.compare('newsecret', params[2]), true);
+      return {
+        rows: [{ user_id: 7, email: 'student@example.com' }],
+      };
+    }
+
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  try {
+    await confirmPasswordReset(
+      {
+        body: { token: 'reset-token', password: 'newsecret' },
+        accepts: () => 'json',
+      },
+      res,
+    );
+
+    assert.equal(res.statusCode, 200);
+    assert.match(res.body.message, /Password reset successfully/);
+  } finally {
+    pool.query = originalQuery;
+  }
+});
+
+test('password reset confirm rejects used or expired tokens', async () => {
+  const res = createMockResponse();
+  const originalQuery = pool.query;
+
+  pool.query = async (sql, params) => {
+    if (sql.includes('UPDATE auth_email_tokens')) {
+      assert.equal(params[0], hashEmailToken('expired-token'));
+      assert.equal(params[1], 'password_reset');
+      return { rows: [] };
+    }
+
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  try {
+    await confirmPasswordReset(
+      {
+        body: { token: 'expired-token', password: 'newsecret' },
+        accepts: () => 'json',
+      },
+      res,
+    );
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.message, /Invalid or expired password reset link/);
   } finally {
     pool.query = originalQuery;
   }
