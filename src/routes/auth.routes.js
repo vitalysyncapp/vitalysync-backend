@@ -6,8 +6,10 @@ import {
 } from '../middleware/auth.middleware.js';
 import { rateLimiters } from '../middleware/rateLimit.middleware.js';
 import {
+  confirmEmailVerification,
   deleteAccount,
   login,
+  resendEmailVerification,
   signup,
   updateProfile
 } from '../controllers/auth.controller.js';
@@ -16,6 +18,18 @@ const router = express.Router();
 
 router.post('/signup', rateLimiters.authBurst, rateLimiters.signup, signup);
 router.post('/login', rateLimiters.authBurst, rateLimiters.loginFailure, login);
+router.post(
+  '/email-verification/resend',
+  rateLimiters.authBurst,
+  rateLimiters.emailVerification,
+  resendEmailVerification
+);
+router.get(
+  '/email-verification/confirm',
+  rateLimiters.authBurst,
+  rateLimiters.emailVerification,
+  confirmEmailVerification
+);
 router.put(
   '/profile',
   requireAuth,

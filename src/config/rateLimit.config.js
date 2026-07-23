@@ -48,6 +48,7 @@ export const rateLimitConfig = Object.freeze({
   authBurst: createPolicy('RATE_LIMIT_AUTH_MAX', 30, 15),
   loginFailure: createPolicy('RATE_LIMIT_LOGIN_FAILURE_MAX', 5, 15),
   signup: createPolicy('RATE_LIMIT_SIGNUP_MAX', 5, 60),
+  emailVerification: createPolicy('RATE_LIMIT_EMAIL_VERIFICATION_MAX', 5, 60),
   nutritionAnalysis: createPolicy(
     'RATE_LIMIT_NUTRITION_ANALYZE_MAX',
     10,

@@ -140,6 +140,11 @@ export function createRateLimiters(config = rateLimitConfig) {
       policy: config.signup,
       keyGenerator: clientIpKey,
     }),
+    emailVerification: createLimiter({
+      identifier: 'email-verification',
+      policy: config.emailVerification,
+      keyGenerator: loginIdentityKey,
+    }),
     nutritionAnalysis: createLimiter({
       identifier: 'nutrition-analysis',
       policy: config.nutritionAnalysis,

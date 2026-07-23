@@ -2,12 +2,23 @@ import bcrypt from 'bcrypt';
 import pool from '../config/db.js';
 import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import { createAccessToken } from '../services/authToken.service.js';
+import {
+  consumeEmailVerificationToken,
+  createEmailVerificationToken,
+} from '../services/authEmailToken.service.js';
+import {
+  normalizeEmail,
+  validateEmailAddress,
+} from '../services/emailValidation.service.js';
+import { mailService } from '../services/mail.service.js';
 import { logApiError } from '../utils/errorLogging.js';
 
 let authSchemaSupportCache = null;
 let authSchemaSupportFetchedAt = 0;
 const AUTH_SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
 const ALLOWED_GENDERS = new Set(['Male', 'Female', 'Other']);
+const RESEND_VERIFICATION_MESSAGE =
+  'If this email belongs to an unverified VitalySync account, a verification link has been sent.';
 
 function normalizeNullableText(value) {
   const trimmed = String(value ?? '').trim();
@@ -123,7 +134,27 @@ async function getAuthSchemaSupport() {
         WHERE table_schema = 'public'
           AND table_name = 'users'
           AND column_name = 'gender'
-      ) AS has_gender
+      ) AS has_gender,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'users'
+          AND column_name = 'email_verified'
+      ) AS has_email_verified,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'users'
+          AND column_name = 'email_verified_at'
+      ) AS has_email_verified_at,
+      EXISTS (
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name = 'auth_email_tokens'
+      ) AS has_auth_email_tokens
   `);
 
   authSchemaSupportCache = result.rows[0] ?? {
@@ -135,11 +166,129 @@ async function getAuthSchemaSupport() {
     has_lifestyle_type: false,
     has_wellness_goal: false,
     has_age: false,
-    has_gender: false
+    has_gender: false,
+    has_email_verified: false,
+    has_email_verified_at: false,
+    has_auth_email_tokens: false
   };
   authSchemaSupportFetchedAt = now;
 
   return authSchemaSupportCache;
+}
+
+function getPublicApiBaseUrl(req) {
+  const configured = String(process.env.API_PUBLIC_URL ?? '').trim();
+  if (configured) {
+    return configured.replace(/\/+$/, '');
+  }
+
+  const host =
+    typeof req.get === 'function'
+      ? req.get('host')
+      : req.headers?.host;
+  if (host) {
+    const protocol = req.protocol || (req.secure ? 'https' : 'http');
+    return `${protocol}://${host}`;
+  }
+
+  return `http://localhost:${process.env.PORT || 3000}`;
+}
+
+function buildEmailVerificationUrl(req, token) {
+  const url = new URL(
+    '/api/auth/email-verification/confirm',
+    getPublicApiBaseUrl(req)
+  );
+  url.searchParams.set('token', token);
+  return url.toString();
+}
+
+async function sendVerificationEmailForUser(req, user) {
+  const token = await createEmailVerificationToken({
+    userId: user.user_id,
+    email: user.email,
+  });
+
+  await mailService.sendVerificationEmail({
+    to: user.email,
+    username: user.username,
+    verificationUrl: buildEmailVerificationUrl(req, token.token),
+  });
+}
+
+function queueVerificationEmail(req, user, schema) {
+  if (
+    schema.has_auth_email_tokens !== true ||
+    schema.has_email_verified !== true ||
+    user.email_verified === true
+  ) {
+    return;
+  }
+
+  sendVerificationEmailForUser(req, user).catch((error) => {
+    logApiError(req, 'Email verification send error', error);
+  });
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function sendVerificationResult(req, res, { status, message }) {
+  const acceptsJson =
+    typeof req.accepts === 'function' &&
+    req.accepts(['html', 'json']) === 'json';
+
+  if (acceptsJson) {
+    return res.status(status).json({ message });
+  }
+
+  return res.status(status).type('html').send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VitalySync Email Verification</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: Arial, sans-serif;
+        background: #f4fbf8;
+        color: #17324d;
+      }
+      main {
+        width: min(92vw, 440px);
+        padding: 28px;
+        border: 1px solid #cfe8df;
+        border-radius: 16px;
+        background: white;
+        box-shadow: 0 16px 44px rgba(17, 40, 65, 0.12);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 24px;
+      }
+      p {
+        margin: 0;
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>VitalySync</h1>
+      <p>${escapeHtml(message)}</p>
+    </main>
+  </body>
+</html>`);
 }
 
 async function ensureUserStreak(userId) {
@@ -177,6 +326,7 @@ function formatUserPayload(user) {
     user_id: user.user_id,
     username: user.username,
     email: user.email,
+    email_verified: user.email_verified == true,
     age: Number.isInteger(age) ? age : null,
     gender: normalizedGender,
     user_type: normalizedUserType,
@@ -199,7 +349,7 @@ export async function signup(req, res) {
       gender
     } = req.body;
     const normalizedUsername = String(username ?? '').trim();
-    const normalizedEmail = String(email ?? '').trim();
+    const normalizedEmail = normalizeEmail(email);
     const normalizedPassword = String(password ?? '').trim();
     const normalizedAge = normalizeOptionalAge(age);
     const normalizedGender = normalizeOptionalGender(gender);
@@ -225,10 +375,15 @@ export async function signup(req, res) {
       });
     }
 
+    const emailValidation = await validateEmailAddress(normalizedEmail);
+    if (emailValidation.error) {
+      return res.status(400).json({ message: emailValidation.error });
+    }
+
     // Check if email or username already exists
     const userCheck = await pool.query(
-      'SELECT * FROM users WHERE email = $1 OR username = $2',
-      [normalizedEmail, normalizedUsername]
+      'SELECT * FROM users WHERE LOWER(email) = $1 OR username = $2',
+      [emailValidation.email, normalizedUsername]
     );
     if (userCheck.rows.length > 0) {
       return res.status(400).json({ message: 'Email or username already exists' });
@@ -238,7 +393,11 @@ export async function signup(req, res) {
     const hashedPassword = await bcrypt.hash(normalizedPassword, 10);
     const schema = await getAuthSchemaSupport();
     const insertColumns = ['username', 'email', 'password'];
-    const insertValues = [normalizedUsername, normalizedEmail, hashedPassword];
+    const insertValues = [
+      normalizedUsername,
+      emailValidation.email,
+      hashedPassword
+    ];
 
     if (schema.has_age) {
       insertColumns.push('age');
@@ -262,6 +421,9 @@ export async function signup(req, res) {
     const wellnessGoalSelect = schema.has_wellness_goal
       ? 'wellness_goal'
       : 'NULL::TEXT AS wellness_goal';
+    const emailVerifiedSelect = schema.has_email_verified
+      ? 'email_verified'
+      : 'FALSE AS email_verified';
 
     // Insert user
     const signupQuery = `INSERT INTO users
@@ -271,6 +433,7 @@ export async function signup(req, res) {
            user_id,
            username,
            email,
+           ${emailVerifiedSelect},
            ${ageSelect},
            ${genderSelect},
            ${roleSelect},
@@ -280,6 +443,7 @@ export async function signup(req, res) {
            NULL::TEXT AS user_type,
            FALSE AS has_onboarding_profile`;
     const newUser = await pool.query(signupQuery, insertValues);
+    queueVerificationEmail(req, newUser.rows[0], schema);
 
     const streak = await ensureUserStreak(newUser.rows[0].user_id);
 
@@ -303,7 +467,7 @@ export async function signup(req, res) {
 export async function login(req, res) {
   try {
     const { email, password } = req.body;
-    const normalizedEmail = String(email ?? '').trim();
+    const normalizedEmail = normalizeEmail(email);
     const normalizedPassword = String(password ?? '').trim();
 
     if (!normalizedEmail || !normalizedPassword)
@@ -319,6 +483,9 @@ export async function login(req, res) {
     const userWellnessSelect = schema.has_wellness_goal
       ? 'users.wellness_goal'
       : 'NULL::TEXT';
+    const emailVerifiedSelect = schema.has_email_verified
+      ? 'users.email_verified'
+      : 'FALSE AS email_verified';
     const profileJoin = schema.has_user_onboarding_profiles
       ? `LEFT JOIN user_onboarding_profiles onboarding_profile
            ON onboarding_profile.user_id = users.user_id`
@@ -350,6 +517,7 @@ export async function login(req, res) {
          users.user_id,
          users.username,
          users.email,
+         ${emailVerifiedSelect},
          ${ageSelect},
          ${genderSelect},
          users.password,
@@ -362,7 +530,7 @@ export async function login(req, res) {
        FROM users
        ${profileJoin}
        ${legacyOnboardingJoin}
-       WHERE users.email = $1`;
+       WHERE LOWER(users.email) = $1`;
     const userQuery = await pool.query(loginQuery, [normalizedEmail]);
     const user = userQuery.rows[0];
 
@@ -400,7 +568,7 @@ export async function updateProfile(req, res) {
       user_type = null
     } = req.body;
     const normalizedUsername = String(username ?? '').trim();
-    const normalizedEmail = String(email ?? '').trim();
+    const normalizedEmail = normalizeEmail(email);
     const normalizedUserType = normalizeNullableText(user_type);
     const normalizedAge = normalizeOptionalAge(age);
     const normalizedGender = normalizeOptionalGender(gender);
@@ -422,10 +590,20 @@ export async function updateProfile(req, res) {
       return res.status(400).json({ message: normalizedGender.error });
     }
 
+    const emailValidation = await validateEmailAddress(normalizedEmail);
+    if (emailValidation.error) {
+      return res.status(400).json({ message: emailValidation.error });
+    }
+
     const schema = await getAuthSchemaSupport();
+    const existingEmailVerifiedSelect = schema.has_email_verified
+      ? 'email_verified'
+      : 'FALSE AS email_verified';
 
     const existingUser = await pool.query(
-      'SELECT user_id FROM users WHERE user_id = $1',
+      `SELECT user_id, email, ${existingEmailVerifiedSelect}
+       FROM users
+       WHERE user_id = $1`,
       [effectiveUserId]
     );
 
@@ -433,11 +611,15 @@ export async function updateProfile(req, res) {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const currentUser = existingUser.rows[0];
+    const emailChanged =
+      normalizeEmail(currentUser.email) !== emailValidation.email;
+
     const duplicateUser = await pool.query(
       `SELECT user_id
        FROM users
-       WHERE (email = $1 OR username = $2) AND user_id <> $3`,
-      [normalizedEmail, normalizedUsername, effectiveUserId]
+       WHERE (LOWER(email) = $1 OR username = $2) AND user_id <> $3`,
+      [emailValidation.email, normalizedUsername, effectiveUserId]
     );
 
     if (duplicateUser.rows.length > 0) {
@@ -447,7 +629,7 @@ export async function updateProfile(req, res) {
     }
 
     const updateAssignments = ['username = $1', 'email = $2'];
-    const updateValues = [normalizedUsername, normalizedEmail];
+    const updateValues = [normalizedUsername, emailValidation.email];
 
     if (schema.has_age) {
       updateValues.push(normalizedAge.value);
@@ -464,6 +646,13 @@ export async function updateProfile(req, res) {
       updateAssignments.push(`role = $${updateValues.length}`);
     }
 
+    if (schema.has_email_verified && emailChanged) {
+      updateAssignments.push('email_verified = FALSE');
+      if (schema.has_email_verified_at) {
+        updateAssignments.push('email_verified_at = NULL');
+      }
+    }
+
     updateValues.push(effectiveUserId);
     const userIdPlaceholder = `$${updateValues.length}`;
     const ageSelect = schema.has_age ? 'age' : 'NULL::INTEGER AS age';
@@ -475,6 +664,9 @@ export async function updateProfile(req, res) {
     const wellnessGoalSelect = schema.has_wellness_goal
       ? 'wellness_goal'
       : 'NULL::TEXT AS wellness_goal';
+    const emailVerifiedSelect = schema.has_email_verified
+      ? 'email_verified'
+      : 'FALSE AS email_verified';
 
     const updateQuery = `UPDATE users
          SET ${updateAssignments.join(', ')}
@@ -483,6 +675,7 @@ export async function updateProfile(req, res) {
            user_id,
            username,
            email,
+           ${emailVerifiedSelect},
            ${ageSelect},
            ${genderSelect},
            ${roleSelect},
@@ -490,6 +683,9 @@ export async function updateProfile(req, res) {
            ${wellnessGoalSelect},
            ${schema.has_onboarding_completed ? 'onboarding_completed' : 'FALSE AS onboarding_completed'}`;
     const updatedUser = await pool.query(updateQuery, updateValues);
+    if (emailChanged) {
+      queueVerificationEmail(req, updatedUser.rows[0], schema);
+    }
 
     if (schema.has_user_onboarding_profiles && normalizedUserType) {
       await pool.query(
@@ -548,6 +744,64 @@ export async function updateProfile(req, res) {
     logApiError(req, 'Profile update error', err);
     res.status(500).json({
       message: 'Failed to update profile',
+    });
+  }
+}
+
+export async function resendEmailVerification(req, res) {
+  try {
+    const normalizedEmail = normalizeEmail(req.body?.email);
+    const schema = await getAuthSchemaSupport();
+
+    if (
+      normalizedEmail &&
+      schema.has_auth_email_tokens === true &&
+      schema.has_email_verified === true
+    ) {
+      const userResult = await pool.query(
+        `SELECT user_id, username, email, email_verified
+         FROM users
+         WHERE LOWER(email) = $1`,
+        [normalizedEmail]
+      );
+      const user = userResult.rows[0];
+
+      if (user && user.email_verified !== true) {
+        queueVerificationEmail(req, user, schema);
+      }
+    }
+
+    return res.status(200).json({
+      message: RESEND_VERIFICATION_MESSAGE,
+    });
+  } catch (err) {
+    logApiError(req, 'Resend email verification error', err);
+    return res.status(500).json({
+      message: 'Unable to send verification email right now',
+    });
+  }
+}
+
+export async function confirmEmailVerification(req, res) {
+  try {
+    const result = await consumeEmailVerificationToken(req.query?.token);
+
+    if (result.error) {
+      return sendVerificationResult(req, res, {
+        status: 400,
+        message: result.error,
+      });
+    }
+
+    return sendVerificationResult(req, res, {
+      status: 200,
+      message: 'Email verified successfully. You can return to VitalySync.',
+    });
+  } catch (err) {
+    logApiError(req, 'Confirm email verification error', err);
+    return sendVerificationResult(req, res, {
+      status: 500,
+      message: 'Unable to verify this email right now.',
     });
   }
 }

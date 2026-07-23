@@ -21,6 +21,7 @@ function createTestConfig(overrides = {}) {
     'authBurst',
     'loginFailure',
     'signup',
+    'emailVerification',
     'nutritionAnalysis',
     'aiNudge',
     'reportRefresh',

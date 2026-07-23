@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   OnboardingServiceError,
   calculateBmi,
+  getOnboardingSummaryBundle,
   normalizeBodyMetrics,
   submitRequiredOnboarding,
   updateUserBurnoutBaseline,
@@ -159,6 +160,48 @@ test('body metrics calculate BMI on the backend and ignore submitted BMI', () =>
       provided: true,
     }
   );
+});
+
+test('onboarding summary exposes email verification state', async () => {
+  const originalQuery = pool.query;
+  const queries = [];
+
+  pool.query = async (text, values = []) => {
+    queries.push({ text, values });
+
+    if (text.includes('FROM users')) {
+      return {
+        rowCount: 1,
+        rows: [
+          {
+            user_id: 1,
+            email_verified: true,
+            onboarding_completed: true,
+            onboarding_completed_at: new Date('2026-07-23T00:00:00.000Z'),
+            has_onboarding_profile: true,
+          },
+        ],
+      };
+    }
+
+    if (
+      text.includes('FROM user_onboarding_profiles') ||
+      text.includes('FROM user_onboarding_answers')
+    ) {
+      return { rowCount: 0, rows: [] };
+    }
+
+    throw new Error(`Unexpected query: ${text}`);
+  };
+
+  try {
+    const summary = await getOnboardingSummaryBundle(1);
+
+    assert.equal(summary.email_verified, true);
+    assert.ok(queries[0].text.includes('users.email_verified'));
+  } finally {
+    pool.query = originalQuery;
+  }
 });
 
 test('onboarding persists server-calculated body metrics', async () => {

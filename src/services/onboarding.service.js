@@ -990,6 +990,7 @@ export async function getOnboardingStatus(userIdValue) {
   const result = await pool.query(
     `SELECT
        users.user_id,
+       users.email_verified,
        users.onboarding_completed,
        users.onboarding_completed_at,
        EXISTS (
@@ -1009,6 +1010,7 @@ export async function getOnboardingStatus(userIdValue) {
 
   return {
     user_id: row.user_id,
+    email_verified: row.email_verified == true,
     onboarding_completed:
       row.onboarding_completed == true && row.has_onboarding_profile == true,
     onboarding_completed_at: row.onboarding_completed_at,
@@ -1097,6 +1099,7 @@ export async function getUserProfileSummary(userIdValue) {
        users.email,
        users.age,
        users.gender,
+       users.email_verified,
        COALESCE(profile.role, users.role) AS role,
        COALESCE(profile.lifestyle_type, users.lifestyle_type) AS lifestyle_type,
        COALESCE(profile.wellness_goal, users.wellness_goal) AS wellness_goal,
@@ -1168,6 +1171,7 @@ export async function getUserProfileSummary(userIdValue) {
       user_id: row.user_id,
       username: row.username,
       email: row.email,
+      email_verified: row.email_verified == true,
       age: row.age,
       gender: row.gender,
       role: row.role,
