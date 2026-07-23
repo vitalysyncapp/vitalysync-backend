@@ -161,12 +161,14 @@ test('insufficient savers return a clear restore failure', async () => {
   );
 });
 
-test('leaderboard rows stay privacy-safe', async () => {
+test('leaderboard rows include profile context for suggested avatars', async () => {
   const client = mockClient({
     leaderboardRows: [
       {
         user_id: 1,
         username: 'Vitaly One',
+        gender: 'Male',
+        user_type: 'Working Professional',
         score: 12,
         protected_day_count: 1,
         longest_streak: 20,
@@ -174,6 +176,8 @@ test('leaderboard rows stay privacy-safe', async () => {
       {
         user_id: 2,
         username: 'Vitaly Two',
+        gender: 'Female',
+        user_type: 'Student',
         score: 9,
         protected_day_count: 0,
         longest_streak: 12,
@@ -192,15 +196,22 @@ test('leaderboard rows stay privacy-safe', async () => {
   assert.deepEqual(Object.keys(leaderboard.rows[0]).sort(), [
     'avatar_color',
     'display_name',
+    'gender',
     'initials',
     'is_current_user',
     'protected_day_count',
     'rank',
     'score',
     'user_id',
+    'user_type',
   ]);
   assert.equal(leaderboard.rows[0].display_name, 'Vitaly One');
   assert.equal(leaderboard.rows[0].is_current_user, true);
+  assert.equal(leaderboard.rows[1].gender, 'Female');
+  assert.equal(leaderboard.rows[1].user_type, 'Student');
+  assert.equal('role' in leaderboard.rows[0], false);
+  assert.equal('age' in leaderboard.rows[0], false);
+  assert.equal('email' in leaderboard.rows[0], false);
 });
 
 test('leaderboard SQL uses contiguous parameters for every filter', async () => {

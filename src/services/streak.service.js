@@ -764,6 +764,8 @@ export async function readLeaderboard(userIdValue, options = {}) {
        SELECT
          users.user_id,
          users.username,
+         users.gender,
+         COALESCE(profile.role, users.role) AS user_type,
          ${scoreSql} AS score,
          COALESCE(protected_counts.protected_day_count, 0) AS protected_day_count,
          streaks.longest_streak,
@@ -799,6 +801,8 @@ export async function readLeaderboard(userIdValue, options = {}) {
     display_name: row.username,
     initials: initialsForName(row.username),
     avatar_color: avatarColorForUser(row.user_id),
+    gender: row.gender ?? null,
+    user_type: row.user_type ?? null,
     score: Number(row.score ?? 0),
     protected_day_count: Number(row.protected_day_count ?? 0),
     is_current_user: Number(row.user_id) === userId,
