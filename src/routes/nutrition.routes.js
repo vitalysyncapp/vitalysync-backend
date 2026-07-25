@@ -94,7 +94,7 @@ function uploadImage(req, res, next) {
       const detectedMime = detectImageMime(req.file.buffer);
       const declaredMime = String(req.file.mimetype ?? '').toLowerCase();
 
-      if (!declaredMime.startsWith('image/') || !detectedMime) {
+      if (!detectedMime && !declaredMime.startsWith('image/')) {
         return res.status(400).json({
           message: 'Only image uploads are allowed',
         });
