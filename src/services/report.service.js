@@ -19,8 +19,8 @@ export async function generateUserReportDocx(userId) {
   const logs = logsResult.rows;
 
   const burnoutResult = await pool.query(
-    `SELECT burnout_score, status_category
-     FROM daily_burnout_scores
+    `SELECT overall_score AS burnout_score, risk_level AS status_category
+     FROM burnout_score_history
      WHERE user_id = $1
      ORDER BY score_date DESC LIMIT 1`,
     [userId]
@@ -35,9 +35,9 @@ export async function generateUserReportDocx(userId) {
     avgStress = (logs.reduce((acc, log) => acc + Number(log.perceived_stress_level || 0), 0) / logs.length).toFixed(1);
   }
 
-  const userName = profile.profile.name || "N/A";
-  const userGender = profile.profile.gender || "N/A";
-  const userRole = profile.profile.role || "N/A";
+  const userName = profile.user.username || "N/A";
+  const userGender = profile.user.gender || "N/A";
+  const userRole = profile.user.role || "N/A";
 
   const doc = new Document({
     sections: [
