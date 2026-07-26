@@ -12,6 +12,8 @@ const BORDERLESS = {
   insideVertical: { style: BorderStyle.NONE, size: 0, color: "auto" }
 };
 
+const TABLE_HEADER_SHADING = { fill: "F3F4F6" };
+
 export async function generateUserReportDocx(userId) {
   const profile = await getUserProfileSummary(userId);
   if (!profile) {
@@ -148,18 +150,114 @@ export async function generateUserReportDocx(userId) {
   const doc = new Document({
     sections: [
       {
-        properties: {},
+        properties: {
+          page: {
+            margin: {
+              top: 1440, // 1 inch margins
+              right: 1440,
+              bottom: 1440,
+              left: 1440,
+            }
+          }
+        },
         children: [
+          // Title
           new Paragraph({
             alignment: AlignmentType.CENTER,
+            spacing: { after: 400 },
             children: [
-              new TextRun({ text: "VitalySync User Wellness Report", bold: true, size: 36, font: "Arial", color: "008000" })
+              new TextRun({ text: "VitalySync User Wellness Report", bold: true, size: 36, font: "Inter", color: "008000" })
             ]
           }),
+
+          // User Info Section
           new Paragraph({
             spacing: { before: 200, after: 100 },
             children: [
-              new TextRun({ text: "Patient / User Information", bold: true, size: 28, font: "Arial" })
+              new TextRun({ text: "User Information", bold: true, size: 28, font: "Inter" })
+            ]
+          }),
+          new Paragraph({
+            spacing: { after: 100 },
+            children: [
+              new TextRun({ text: "Name: ", bold: true, font: "Inter", size: 24 }),
+              new TextRun({ text: userName, font: "Inter", size: 24 }),
+            ]
+          }),
+          new Paragraph({
+            spacing: { after: 100 },
+            children: [
+              new TextRun({ text: "Gender: ", bold: true, font: "Inter", size: 24 }),
+              new TextRun({ text: userGender, font: "Inter", size: 24 }),
+            ]
+          }),
+          new Paragraph({
+            spacing: { after: 100 },
+            children: [
+              new TextRun({ text: "Role: ", bold: true, font: "Inter", size: 24 }),
+              new TextRun({ text: userRole, font: "Inter", size: 24 }),
+            ]
+          }),
+          new Paragraph({
+            spacing: { after: 400 },
+            children: [
+              new TextRun({ text: "Date of Report: ", bold: true, font: "Inter", size: 24 }),
+              new TextRun({ text: new Date().toLocaleDateString(), font: "Inter", size: 24 }),
+            ]
+          }),
+
+          // Analysis and insights
+          new Paragraph({
+            spacing: { before: 200, after: 100 },
+            children: [
+              new TextRun({ text: "Analysis and insights", bold: true, size: 28, font: "Inter" })
+            ]
+          }),
+          new Paragraph({
+            spacing: { before: 100, after: 100 },
+            children: [
+              new TextRun({ text: "Status: ", bold: true, font: "Inter", size: 24, color: "0000FF" }),
+              new TextRun({ text: insights.description, font: "Inter", size: 24 }) 
+            ]
+          }),
+          new Paragraph({
+            spacing: { after: 100 },
+            children: [
+              new TextRun({ text: "Main Drivers: ", bold: true, font: "Inter", size: 24, color: "FFD700" }),
+              new TextRun({ text: insights.drivers, font: "Inter", size: 24 }) 
+            ]
+          }),
+          new Paragraph({
+            spacing: { after: 100 },
+            children: [
+              new TextRun({ text: "Critical Signals: ", bold: true, font: "Inter", size: 24, color: "FF0000" }),
+              new TextRun({ text: insights.importance, font: "Inter", size: 24 }) 
+            ]
+          }),
+          new Paragraph({
+            spacing: { after: 400 },
+            children: [
+              new TextRun({ text: "Recommendations: ", bold: true, font: "Inter", size: 24, color: "800080" }),
+              new TextRun({ text: insights.recommendations, font: "Inter", size: 24 }) 
+            ]
+          }),
+
+          // Burnout Dimensions
+          new Paragraph({
+            spacing: { before: 200, after: 100 },
+            children: [
+              new TextRun({ text: "Burnout Status & Maslach Dimensions", bold: true, size: 28, font: "Inter" })
+            ]
+          }),
+          new Paragraph({
+            spacing: { after: 200 },
+            children: [
+              new TextRun({ text: "Explanation: ", bold: true, font: "Inter", size: 20, color: "0000FF" }),
+              new TextRun({ text: "This table breaks down your current burnout risk using the Maslach dimensions. A higher score in exhaustion or detachment signals a ", font: "Inter", size: 20 }),
+              new TextRun({ text: "critical risk", bold: true, color: "FF0000", font: "Inter", size: 20 }),
+              new TextRun({ text: ", while reduced accomplishment highlights areas needing ", font: "Inter", size: 20 }),
+              new TextRun({ text: "recommended improvement", bold: true, color: "800080", font: "Inter", size: 20 }),
+              new TextRun({ text: ".", font: "Inter", size: 20 })
             ]
           }),
           new Table({
@@ -168,72 +266,59 @@ export async function generateUserReportDocx(userId) {
             rows: [
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Name", bold: true, font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: userName, font: "Arial", size: 24 })] })] }),
+                  new TableCell({ shading: TABLE_HEADER_SHADING, children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Metric", bold: true, font: "Inter", size: 22 })] })] }),
+                  new TableCell({ shading: TABLE_HEADER_SHADING, children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Value", bold: true, font: "Inter", size: 22 })] })] }),
                 ],
               }),
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Gender", bold: true, font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: userGender, font: "Arial", size: 24 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Latest Risk Level", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: latestBurnout ? latestBurnout.status_category : "Unknown", font: "Inter", size: 22 })] })] }),
                 ],
               }),
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Role", bold: true, font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: userRole, font: "Arial", size: 24 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Overall Burnout Score", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: latestBurnout ? String(latestBurnout.burnout_score) : "N/A", font: "Inter", size: 22 })] })] }),
                 ],
               }),
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Date of Report", bold: true, font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: new Date().toLocaleDateString(), font: "Arial", size: 24 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Emotional Exhaustion", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: latestBurnout && latestBurnout.emotional_exhaustion_score != null ? String(latestBurnout.emotional_exhaustion_score) : "N/A", font: "Inter", size: 22 })] })] }),
+                ],
+              }),
+              new TableRow({
+                children: [
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Depersonalization/Detachment", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: latestBurnout && latestBurnout.detachment_score != null ? String(latestBurnout.detachment_score) : "N/A", font: "Inter", size: 22 })] })] }),
+                ],
+              }),
+              new TableRow({
+                children: [
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Reduced Accomplishment", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: latestBurnout && latestBurnout.reduced_accomplishment_score != null ? String(latestBurnout.reduced_accomplishment_score) : "N/A", font: "Inter", size: 22 })] })] }),
                 ],
               }),
             ],
           }),
 
-          // --- AI Insights (Colored) ---
+          // Time-based Averages
           new Paragraph({
             spacing: { before: 400, after: 100 },
             children: [
-              new TextRun({ text: "AI Analysis & Insights", bold: true, size: 28, font: "Arial" })
+              new TextRun({ text: "Time-based Averages (Wellness Logs)", bold: true, size: 28, font: "Inter" })
             ]
           }),
           new Paragraph({
-            spacing: { before: 100 },
+            spacing: { after: 200 },
             children: [
-              new TextRun({ text: "Description: ", bold: true, font: "Arial", size: 24 }),
-              new TextRun({ text: insights.description, font: "Arial", size: 24, color: "0000FF" }) // Blue
-            ]
-          }),
-          new Paragraph({
-            spacing: { before: 100 },
-            children: [
-              new TextRun({ text: "Main Drivers: ", bold: true, font: "Arial", size: 24 }),
-              new TextRun({ text: insights.drivers, font: "Arial", size: 24, color: "FFD700" }) // Yellow
-            ]
-          }),
-          new Paragraph({
-            spacing: { before: 100 },
-            children: [
-              new TextRun({ text: "Critical Signals & Importance: ", bold: true, font: "Arial", size: 24 }),
-              new TextRun({ text: insights.importance, font: "Arial", size: 24, color: "FF0000" }) // Red
-            ]
-          }),
-          new Paragraph({
-            spacing: { before: 100 },
-            children: [
-              new TextRun({ text: "Recommendations: ", bold: true, font: "Arial", size: 24 }),
-              new TextRun({ text: insights.recommendations, font: "Arial", size: 24, color: "800080" }) // Purple
-            ]
-          }),
-
-          // --- Burnout Dimensions ---
-          new Paragraph({
-            spacing: { before: 400, after: 100 },
-            children: [
-              new TextRun({ text: "Burnout Status & Maslach Dimensions", bold: true, size: 28, font: "Arial" })
+              new TextRun({ text: "Explanation: ", bold: true, font: "Inter", size: 20, color: "0000FF" }),
+              new TextRun({ text: "This compares your self-reported wellness logs over time. Consistent sleep and mood are ", font: "Inter", size: 20 }),
+              new TextRun({ text: "positive indicators", bold: true, color: "008000", font: "Inter", size: 20 }),
+              new TextRun({ text: ", while sharp drops in energy or spikes in stress act as ", font: "Inter", size: 20 }),
+              new TextRun({ text: "important warnings", bold: true, color: "FFD700", font: "Inter", size: 20 }),
+              new TextRun({ text: ".", font: "Inter", size: 20 })
             ]
           }),
           new Table({
@@ -242,48 +327,66 @@ export async function generateUserReportDocx(userId) {
             rows: [
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Metric", bold: true, font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Value", bold: true, font: "Arial", size: 24 })] })] }),
+                  new TableCell({ shading: TABLE_HEADER_SHADING, children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Period", bold: true, font: "Inter", size: 22 })] })] }),
+                  new TableCell({ shading: TABLE_HEADER_SHADING, children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Sleep (h)", bold: true, font: "Inter", size: 22 })] })] }),
+                  new TableCell({ shading: TABLE_HEADER_SHADING, children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Mood", bold: true, font: "Inter", size: 22 })] })] }),
+                  new TableCell({ shading: TABLE_HEADER_SHADING, children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Energy", bold: true, font: "Inter", size: 22 })] })] }),
+                  new TableCell({ shading: TABLE_HEADER_SHADING, children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Stress", bold: true, font: "Inter", size: 22 })] })] }),
                 ],
               }),
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Latest Risk Level", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: latestBurnout ? latestBurnout.status_category : "Unknown", font: "Arial", size: 24 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "This Week", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgWeek.sleep), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgWeek.mood), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgWeek.energy), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgWeek.stress), font: "Inter", size: 22 })] })] }),
                 ],
               }),
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Overall Burnout Score", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: latestBurnout ? String(latestBurnout.burnout_score) : "N/A", font: "Arial", size: 24 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "This Month", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgMonth.sleep), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgMonth.mood), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgMonth.energy), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgMonth.stress), font: "Inter", size: 22 })] })] }),
                 ],
               }),
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Emotional Exhaustion", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: latestBurnout && latestBurnout.emotional_exhaustion_score != null ? String(latestBurnout.emotional_exhaustion_score) : "N/A", font: "Arial", size: 24 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Last Month", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgPrevMonth.sleep), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgPrevMonth.mood), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgPrevMonth.energy), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgPrevMonth.stress), font: "Inter", size: 22 })] })] }),
                 ],
               }),
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Depersonalization/Detachment", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: latestBurnout && latestBurnout.detachment_score != null ? String(latestBurnout.detachment_score) : "N/A", font: "Arial", size: 24 })] })] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Reduced Accomplishment", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: latestBurnout && latestBurnout.reduced_accomplishment_score != null ? String(latestBurnout.reduced_accomplishment_score) : "N/A", font: "Arial", size: 24 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "This Year", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgYear.sleep), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgYear.mood), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgYear.energy), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(avgYear.stress), font: "Inter", size: 22 })] })] }),
                 ],
               }),
             ],
           }),
 
-          // --- Time-based Averages & Comparisons ---
+          // Exercise Reports
           new Paragraph({
             spacing: { before: 400, after: 100 },
             children: [
-              new TextRun({ text: "Time-based Averages (Wellness Logs)", bold: true, size: 28, font: "Arial" })
+              new TextRun({ text: "Exercise & Activity Report", bold: true, size: 28, font: "Inter" })
+            ]
+          }),
+          new Paragraph({
+            spacing: { after: 200 },
+            children: [
+              new TextRun({ text: "Explanation: ", bold: true, font: "Inter", size: 20, color: "0000FF" }),
+              new TextRun({ text: "This summarizes your physical activity. Reaching daily goals consistently contributes to ", font: "Inter", size: 20 }),
+              new TextRun({ text: "positive wellness trends", bold: true, color: "008000", font: "Inter", size: 20 }),
+              new TextRun({ text: " and helps mitigate burnout risk.", font: "Inter", size: 20 })
             ]
           }),
           new Table({
@@ -292,101 +395,42 @@ export async function generateUserReportDocx(userId) {
             rows: [
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Period", bold: true, font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Sleep (h)", bold: true, font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Mood", bold: true, font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Energy", bold: true, font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Stress", bold: true, font: "Arial", size: 24 })] })] }),
+                  new TableCell({ shading: TABLE_HEADER_SHADING, children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Period", bold: true, font: "Inter", size: 22 })] })] }),
+                  new TableCell({ shading: TABLE_HEADER_SHADING, children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Avg Steps/Day", bold: true, font: "Inter", size: 22 })] })] }),
+                  new TableCell({ shading: TABLE_HEADER_SHADING, children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Avg Active Mins", bold: true, font: "Inter", size: 22 })] })] }),
+                  new TableCell({ shading: TABLE_HEADER_SHADING, children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Avg Calories", bold: true, font: "Inter", size: 22 })] })] }),
                 ],
               }),
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "This Week", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgWeek.sleep), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgWeek.mood), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgWeek.energy), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgWeek.stress), font: "Arial", size: 24 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "This Week", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(exWeek.steps), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(exWeek.activeMins), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(exWeek.calories), font: "Inter", size: 22 })] })] }),
                 ],
               }),
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "This Month", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgMonth.sleep), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgMonth.mood), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgMonth.energy), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgMonth.stress), font: "Arial", size: 24 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "This Month", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(exMonth.steps), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(exMonth.activeMins), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(exMonth.calories), font: "Inter", size: 22 })] })] }),
                 ],
               }),
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Last Month", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgPrevMonth.sleep), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgPrevMonth.mood), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgPrevMonth.energy), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgPrevMonth.stress), font: "Arial", size: 24 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "Last Month", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(exPrevMonth.steps), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(exPrevMonth.activeMins), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(exPrevMonth.calories), font: "Inter", size: 22 })] })] }),
                 ],
               }),
               new TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "This Year", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgYear.sleep), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgYear.mood), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgYear.energy), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(avgYear.stress), font: "Arial", size: 24 })] })] }),
-                ],
-              }),
-            ],
-          }),
-
-          // --- Exercise Reports ---
-          new Paragraph({
-            spacing: { before: 400, after: 100 },
-            children: [
-              new TextRun({ text: "Exercise & Activity Report", bold: true, size: 28, font: "Arial" })
-            ]
-          }),
-          new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            borders: BORDERLESS,
-            rows: [
-              new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Period", bold: true, font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Avg Steps/Day", bold: true, font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Avg Active Mins", bold: true, font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Avg Calories", bold: true, font: "Arial", size: 24 })] })] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "This Week", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(exWeek.steps), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(exWeek.activeMins), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(exWeek.calories), font: "Arial", size: 24 })] })] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "This Month", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(exMonth.steps), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(exMonth.activeMins), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(exMonth.calories), font: "Arial", size: 24 })] })] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Last Month", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(exPrevMonth.steps), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(exPrevMonth.activeMins), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(exPrevMonth.calories), font: "Arial", size: 24 })] })] }),
-                ],
-              }),
-              new TableRow({
-                children: [
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "This Year", font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(exYear.steps), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(exYear.activeMins), font: "Arial", size: 24 })] })] }),
-                  new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: String(exYear.calories), font: "Arial", size: 24 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: "This Year", font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(exYear.steps), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(exYear.activeMins), font: "Inter", size: 22 })] })] }),
+                  new TableCell({ children: [new Paragraph({ spacing: { before: 100, after: 100 }, children: [new TextRun({ text: String(exYear.calories), font: "Inter", size: 22 })] })] }),
                 ],
               }),
             ],
@@ -399,8 +443,9 @@ export async function generateUserReportDocx(userId) {
               new TextRun({
                 text: "Disclaimer: This report is generated for personal wellness tracking and is not a substitute for professional medical advice, diagnosis, or treatment.",
                 italics: true,
-                size: 20,
-                font: "Arial",
+                size: 18,
+                font: "Inter",
+                color: "888888"
               })
             ]
           })
