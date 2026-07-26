@@ -62,18 +62,9 @@ function average(values) {
   return valid.reduce((sum, value) => sum + value, 0) / valid.length;
 }
 
-function averagePresent(values) {
-  const presentValues = values.filter((value) => value != null);
-  return presentValues.length === 0 ? null : average(presentValues);
-}
-
 function round(value, digits = 1) {
   const factor = 10 ** digits;
   return Math.round(toNumber(value) * factor) / factor;
-}
-
-function roundNullable(value, digits = 1) {
-  return value == null ? null : round(value, digits);
 }
 
 function nonNoneList(value) {
@@ -175,11 +166,6 @@ async function buildDailyReport(client, userId, date) {
          energy_level,
          hydration_liters,
          workload_hours_band,
-         perceived_stress_level,
-         break_quality_level,
-         daily_detachment_level,
-         daily_focus_level,
-         daily_accomplishment_level,
          exercise_names,
          symptom_names,
          habit_names,
@@ -256,14 +242,6 @@ async function buildDailyReport(client, userId, date) {
 
   const sleepHours = log ? toNumber(log.sleep_hours) : 0;
   const hydrationLiters = log ? toNumber(log.hydration_liters) : 0;
-  const stressLevel = log ? toInteger(log.perceived_stress_level, 0) : 0;
-  const dailyDetachmentLevel = log
-    ? toNullableInteger(log.daily_detachment_level)
-    : null;
-  const dailyFocusLevel = log ? toNullableInteger(log.daily_focus_level) : null;
-  const dailyAccomplishmentLevel = log
-    ? toNullableInteger(log.daily_accomplishment_level)
-    : null;
   const steps = activity ? toInteger(activity.steps) : 0;
   const mealCount = nutrition ? toInteger(nutrition.meal_count) : 0;
   const burnoutScore = burnout ? round(burnout.overall_score, 0) : null;
@@ -277,11 +255,6 @@ async function buildDailyReport(client, userId, date) {
     hydration_liters: hydrationLiters,
     mood_index: log ? toInteger(log.mood_index) : null,
     energy_level: log ? toInteger(log.energy_level) : null,
-    perceived_stress_level: stressLevel || null,
-    break_quality_level: log ? toInteger(log.break_quality_level) : null,
-    daily_detachment_level: dailyDetachmentLevel,
-    daily_focus_level: dailyFocusLevel,
-    daily_accomplishment_level: dailyAccomplishmentLevel,
     steps,
     goal_steps: activity ? toInteger(activity.goal_steps) : null,
     activity_goal_completed: activity?.goal_completed == true,
@@ -300,10 +273,6 @@ async function buildDailyReport(client, userId, date) {
   const priority = dailyPriority({
     sleepHours,
     hydrationLiters,
-    stressLevel,
-    dailyDetachmentLevel,
-    dailyFocusLevel,
-    dailyAccomplishmentLevel,
     burnoutScore,
     riskLevel,
     symptoms
@@ -321,10 +290,6 @@ async function buildDailyReport(client, userId, date) {
       burnout,
       sleepHours,
       hydrationLiters,
-      stressLevel,
-      dailyDetachmentLevel,
-      dailyFocusLevel,
-      dailyAccomplishmentLevel,
       steps,
       mealCount,
       symptoms,
@@ -360,11 +325,6 @@ async function buildWeeklyReport(client, userId, weekStart) {
          mood_index,
          energy_level,
          hydration_liters,
-         perceived_stress_level,
-         break_quality_level,
-         daily_detachment_level,
-         daily_focus_level,
-         daily_accomplishment_level,
          exercise_names,
          symptom_names,
          habit_names,
@@ -400,16 +360,23 @@ async function buildWeeklyReport(client, userId, weekStart) {
       [userId, weekStart, weekEnd]
     ),
     client.query(
-      `SELECT
+       `SELECT
          week_start_date,
+         due_date,
+         response_date,
+         perceived_pressure_level,
          productivity_focus_level,
          recovery_rest_level,
          detachment_level,
          accomplishment_level,
+         schema_version,
          updated_at
        FROM weekly_pulse_responses
-       WHERE user_id = $1 AND week_start_date = $2`,
-      [userId, weekStart]
+       WHERE user_id = $1
+         AND response_date BETWEEN $2 AND $3
+       ORDER BY response_date DESC, updated_at DESC
+       LIMIT 1`,
+      [userId, weekStart, weekEnd]
     ),
     client.query(
       `SELECT
@@ -445,20 +412,6 @@ async function buildWeeklyReport(client, userId, weekStart) {
   const averageSleep = round(average(logs.map((log) => log.sleep_hours)));
   const averageHydration = round(average(logs.map((log) => log.hydration_liters)));
   const averageMood = round(average(logs.map((log) => log.mood_index)));
-  const averageStress = round(
-    average(logs.map((log) => log.perceived_stress_level))
-  );
-  const averageDailyDetachment = roundNullable(
-    averagePresent(logs.map((log) => toNullableInteger(log.daily_detachment_level)))
-  );
-  const averageDailyFocus = roundNullable(
-    averagePresent(logs.map((log) => toNullableInteger(log.daily_focus_level)))
-  );
-  const averageDailyAccomplishment = roundNullable(
-    averagePresent(
-      logs.map((log) => toNullableInteger(log.daily_accomplishment_level))
-    )
-  );
   const exerciseDays = logs.filter((log) => {
     if (log.exercise_goal_completed == true) {
       return true;
@@ -498,10 +451,8 @@ async function buildWeeklyReport(client, userId, weekStart) {
     average_sleep_hours: averageSleep,
     average_hydration_liters: averageHydration,
     average_mood_index: averageMood,
-    average_stress_level: averageStress,
-    average_daily_detachment_level: averageDailyDetachment,
-    average_daily_focus_level: averageDailyFocus,
-    average_daily_accomplishment_level: averageDailyAccomplishment,
+    weekly_perceived_pressure_level:
+      toNullableInteger(weeklyPulse?.perceived_pressure_level),
     weekly_productivity_focus_level:
       toNullableInteger(weeklyPulse?.productivity_focus_level),
     weekly_recovery_rest_level:
@@ -531,10 +482,6 @@ async function buildWeeklyReport(client, userId, weekStart) {
       loggedDays,
       averageSleep,
       averageHydration,
-      averageStress,
-      averageDailyDetachment,
-      averageDailyFocus,
-      averageDailyAccomplishment,
       exerciseDays,
       totalSteps,
       mealLoggedDays,
@@ -545,10 +492,6 @@ async function buildWeeklyReport(client, userId, weekStart) {
     priority: weeklyPriority({
       loggedDays,
       averageSleep,
-      averageStress,
-      averageDailyDetachment,
-      averageDailyFocus,
-      averageDailyAccomplishment,
       weeklyPulse,
       latestBurnoutScore,
       latestBurnoutRisk: latestBurnout?.risk_level ?? null
@@ -672,10 +615,6 @@ async function upsertInsightReport(client, userId, report) {
 function dailyPriority({
   sleepHours,
   hydrationLiters,
-  stressLevel,
-  dailyDetachmentLevel,
-  dailyFocusLevel,
-  dailyAccomplishmentLevel,
   burnoutScore,
   riskLevel,
   symptoms
@@ -683,10 +622,6 @@ function dailyPriority({
   if (
     burnoutScore >= 70 ||
     ['high', 'severe'].includes(String(riskLevel ?? '').toLowerCase()) ||
-    stressLevel >= 5 ||
-    dailyDetachmentLevel >= 5 ||
-    (dailyFocusLevel != null && dailyFocusLevel <= 1) ||
-    (dailyAccomplishmentLevel != null && dailyAccomplishmentLevel <= 1) ||
     symptoms.length >= 3
   ) {
     return 'high';
@@ -698,31 +633,19 @@ function dailyPriority({
   if (hydrationLiters > 0 && hydrationLiters < 1.5) {
     return 'medium';
   }
-  if (stressLevel >= 4) {
-    return 'medium';
-  }
-  if (
-    dailyDetachmentLevel >= 4 ||
-    (dailyFocusLevel != null && dailyFocusLevel <= 2) ||
-    (dailyAccomplishmentLevel != null && dailyAccomplishmentLevel <= 2)
-  ) {
-    return 'medium';
-  }
-
   return 'low';
 }
 
 function weeklyPriority({
   loggedDays,
   averageSleep,
-  averageStress,
-  averageDailyDetachment,
-  averageDailyFocus,
-  averageDailyAccomplishment,
   weeklyPulse,
   latestBurnoutScore,
   latestBurnoutRisk
 }) {
+  const weeklyPressure = toNullableInteger(
+    weeklyPulse?.perceived_pressure_level
+  );
   const weeklyDetachment = toNullableInteger(weeklyPulse?.detachment_level);
   const weeklyFocus = toNullableInteger(weeklyPulse?.productivity_focus_level);
   const weeklyAccomplishment =
@@ -731,11 +654,8 @@ function weeklyPriority({
   if (
     latestBurnoutScore >= 70 ||
     ['high', 'severe'].includes(String(latestBurnoutRisk ?? '').toLowerCase()) ||
-    averageStress >= 4.5 ||
-    averageDailyDetachment >= 4.5 ||
+    weeklyPressure >= 5 ||
     weeklyDetachment >= 5 ||
-    (averageDailyFocus > 0 && averageDailyFocus <= 1.5) ||
-    (averageDailyAccomplishment > 0 && averageDailyAccomplishment <= 1.5) ||
     (weeklyFocus != null && weeklyFocus <= 1) ||
     (weeklyAccomplishment != null && weeklyAccomplishment <= 1)
   ) {
@@ -744,11 +664,8 @@ function weeklyPriority({
 
   if (
     (averageSleep > 0 && averageSleep < 6) ||
-    averageStress >= 4 ||
-    averageDailyDetachment >= 4 ||
+    weeklyPressure >= 4 ||
     weeklyDetachment >= 4 ||
-    (averageDailyFocus > 0 && averageDailyFocus <= 2) ||
-    (averageDailyAccomplishment > 0 && averageDailyAccomplishment <= 2) ||
     (weeklyFocus != null && weeklyFocus <= 2) ||
     (weeklyAccomplishment != null && weeklyAccomplishment <= 2)
   ) {
@@ -761,10 +678,6 @@ function weeklyPriority({
   return 'low';
 }
 
-function likertText(value) {
-  return value == null || value === 0 ? '--' : value;
-}
-
 function dailySummary({
   log,
   activity,
@@ -772,10 +685,6 @@ function dailySummary({
   burnout,
   sleepHours,
   hydrationLiters,
-  stressLevel,
-  dailyDetachmentLevel,
-  dailyFocusLevel,
-  dailyAccomplishmentLevel,
   steps,
   mealCount,
   symptoms,
@@ -784,7 +693,7 @@ function dailySummary({
   riskLevel
 }) {
   if (burnout) {
-    return `Burnout risk is ${riskLevel} at ${burnoutScore}/100. Yesterday's check-in shows sleep ${sleepHours || '--'}h, stress ${stressLevel || '--'}/5, detachment ${likertText(dailyDetachmentLevel)}/5, focus ${likertText(dailyFocusLevel)}/5, and accomplishment ${likertText(dailyAccomplishmentLevel)}/5.`;
+    return `Burnout risk is ${riskLevel} at ${burnoutScore}/100. Yesterday's short check-in shows ${sleepHours || '--'}h sleep, ${log?.energy_level ?? '--'}/5 energy, ${log?.mood_index == null ? '--' : toInteger(log.mood_index) + 1}/5 mood, and ${hydrationLiters || '--'}L hydration. Weekly dimension context is included in the score when available.`;
   }
 
   if (log) {
@@ -794,7 +703,7 @@ function dailySummary({
     const habitText = habits.length > 0
       ? `${habits.length} recovery habit${habits.length === 1 ? '' : 's'}`
       : 'no recovery habits logged';
-    return `Yesterday's log shows ${sleepHours}h sleep, stress ${stressLevel || '--'}/5, detachment ${likertText(dailyDetachmentLevel)}/5, focus ${likertText(dailyFocusLevel)}/5, ${symptomText}, and ${habitText}.`;
+    return `Yesterday's short log shows ${sleepHours}h sleep, ${log.energy_level ?? '--'}/5 energy, ${hydrationLiters || '--'}L hydration, ${symptomText}, and ${habitText}.`;
   }
 
   if (activity || nutrition) {
@@ -808,10 +717,6 @@ function weeklySummary({
   loggedDays,
   averageSleep,
   averageHydration,
-  averageStress,
-  averageDailyDetachment,
-  averageDailyFocus,
-  averageDailyAccomplishment,
   exerciseDays,
   totalSteps,
   mealLoggedDays,
@@ -823,8 +728,8 @@ function weeklySummary({
     ? 'No burnout score trend is available yet'
     : `Latest burnout risk is ${latestBurnoutRisk} at ${latestBurnoutScore}/100`;
   const pulseText = weeklyPulse
-    ? 'weekly pulse is complete'
+    ? `weekly pulse: pressure ${weeklyPulse.perceived_pressure_level}/5, recovery ${weeklyPulse.recovery_rest_level}/5, detachment ${weeklyPulse.detachment_level}/5, focus ${weeklyPulse.productivity_focus_level}/5, and accomplishment ${weeklyPulse.accomplishment_level}/5`
     : 'weekly pulse is still pending';
 
-  return `${burnoutText}. This week has ${loggedDays}/7 daily logs, ${averageSleep || '--'}h average sleep, stress ${averageStress || '--'}/5, daily detachment ${likertText(averageDailyDetachment)}/5, focus ${likertText(averageDailyFocus)}/5, accomplishment ${likertText(averageDailyAccomplishment)}/5, ${exerciseDays} movement day${exerciseDays === 1 ? '' : 's'}, and ${pulseText}.`;
+  return `${burnoutText}. This week has ${loggedDays}/7 short daily logs, ${averageSleep || '--'}h average sleep, ${averageHydration || '--'}L average hydration, ${exerciseDays} movement day${exerciseDays === 1 ? '' : 's'}, and ${pulseText}.`;
 }

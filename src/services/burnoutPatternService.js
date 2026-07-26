@@ -206,6 +206,20 @@ function scoreDateInRange(score, startDate, endDate) {
   return score.score_date >= startDate && score.score_date <= endDate;
 }
 
+function weeklyContextForScore(score) {
+  const pulse = score?.source_snapshot?.weekly_pulse;
+  if (!pulse || typeof pulse !== 'object') {
+    return null;
+  }
+
+  return {
+    response_date: pulse.response_date ?? null,
+    due_date: pulse.due_date ?? null,
+    age_days: toNumberOrNull(pulse.age_days),
+    freshness: pulse.freshness ?? 'unknown'
+  };
+}
+
 function summarizeWindow(scores, days, endDate) {
   const startDate = addDays(endDate, -(days - 1));
   const previousStartDate = addDays(startDate, -days);
@@ -233,6 +247,9 @@ function summarizeWindow(scores, days, endDate) {
     }))
   );
   const dimensionSummary = summarizeDimensions(currentScores);
+  const weeklyContexts = currentScores
+    .map(weeklyContextForScore)
+    .filter(Boolean);
 
   return {
     window_days: days,
@@ -260,6 +277,13 @@ function summarizeWindow(scores, days, endDate) {
     average_completeness_score: average(
       currentScores.map((score) => score.completeness_score)
     ),
+    weekly_context: {
+      latest: weeklyContextForScore(latest),
+      scores_with_context: weeklyContexts.length,
+      coverage_percent: currentScores.length === 0
+        ? 0
+        : roundTwo((weeklyContexts.length / currentScores.length) * 100)
+    },
     dimension_averages: dimensionSummary.averages,
     dimension_deltas: dimensionSummary.deltas,
     dominant_dimension: dimensionSummary.dominant,
@@ -268,7 +292,8 @@ function summarizeWindow(scores, days, endDate) {
       score_date: score.score_date,
       overall_score: score.overall_score,
       risk_level: score.risk_level,
-      confidence_score: score.confidence_score
+      confidence_score: score.confidence_score,
+      weekly_context: weeklyContextForScore(score)
     }))
   };
 }
@@ -442,7 +467,7 @@ function buildPatterns(windows, latestScore) {
       'low_confidence_score',
       'low',
       'Score confidence is limited',
-      'Several expected fields are missing, so recommendations should stay gentle until more data is available.',
+      'Recent check-ins have limited coverage, so recommendations should stay gentle until the daily signals and weekly context are clearer.',
       {
         average_confidence_score: window7.average_confidence_score,
         average_completeness_score: window7.average_completeness_score
@@ -482,6 +507,20 @@ function buildAdaptiveState(windows, patterns, latestScore) {
       recommended_focus: 'data_completion',
       confidence_score: window7.average_confidence_score ?? 0,
       reason: 'Recent score coverage is too low for adaptive decisions.'
+    };
+  }
+
+  if (
+    window7.average_confidence_score != null &&
+    window7.average_confidence_score < 55
+  ) {
+    return {
+      state: 'limited_confidence',
+      label: 'Limited confidence',
+      priority: 'low',
+      recommended_focus: 'data_completion',
+      confidence_score: window7.average_confidence_score,
+      reason: 'Recent daily signals or weekly context are incomplete.'
     };
   }
 

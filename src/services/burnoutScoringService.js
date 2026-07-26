@@ -87,13 +87,20 @@ export async function loadBurnoutScoreInputs(client, userId, scoreDate) {
          pulse_id,
          user_id,
          week_start_date,
+         due_date,
+         response_date,
+         perceived_pressure_level,
          productivity_focus_level,
          recovery_rest_level,
          detachment_level,
-         accomplishment_level
+         accomplishment_level,
+         schema_version
        FROM weekly_pulse_responses
-       WHERE user_id = $1 AND week_start_date = $2`,
-      [userId, weekStartDate]
+       WHERE user_id = $1
+         AND response_date <= $2
+       ORDER BY response_date DESC, updated_at DESC
+       LIMIT 1`,
+      [userId, normalizedScoreDate]
     ),
     client.query(
       `SELECT

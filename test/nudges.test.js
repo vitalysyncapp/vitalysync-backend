@@ -9,7 +9,8 @@ import {
 } from '../src/controllers/adaptive.controller.js';
 import {
   applyRecentFeedback,
-  personalizeNudgeRecommendation
+  personalizeNudgeRecommendation,
+  stateRecommendation
 } from '../src/services/adaptiveNudgeService.js';
 import {
   buildAiContext,
@@ -191,6 +192,20 @@ test('smart nudge personalization adds username metadata without changing rankin
     'wellness_goals',
     'routine_times'
   ]);
+});
+
+test('low-confidence score states do not create urgent assistant nudges', () => {
+  const recommendation = stateRecommendation({
+    latest_score: { risk_level: 'critical', overall_score: 84 },
+    adaptive_state: {
+      state: 'critical',
+      confidence_score: 40,
+      reason: 'Limited inputs'
+    },
+    patterns: []
+  });
+
+  assert.equal(recommendation, null);
 });
 
 test('AI nudge context carries personal context and keeps username in message locally', () => {

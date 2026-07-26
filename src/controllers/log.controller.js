@@ -5,6 +5,10 @@ import {
   upsertBurnoutScoresForWeek
 } from '../services/burnoutScoringService.js';
 import {
+  advanceCheckInSchedule,
+  getCheckInScheduleStatus
+} from '../services/checkInSchedule.service.js';
+import {
   StreakServiceError,
   awardStreakRewardsForLog,
   formatStreakPayload as formatStreakPayloadForClient,
@@ -759,14 +763,20 @@ export async function getWeeklyPulseStatus(req, res) {
          pulse_id,
          user_id,
          week_start_date,
+         due_date,
+         response_date,
+         perceived_pressure_level,
          productivity_focus_level,
          recovery_rest_level,
          detachment_level,
          accomplishment_level,
+         schema_version,
          created_at,
          updated_at
        FROM weekly_pulse_responses
-       WHERE user_id = $1 AND week_start_date = $2`,
+       WHERE user_id = $1 AND week_start_date = $2
+       ORDER BY response_date DESC, updated_at DESC
+       LIMIT 1`,
       [userId, weekStartDate]
     );
 
@@ -785,6 +795,7 @@ export async function saveWeeklyPulse(req, res) {
   const {
     user_id: rawUserId,
     response_date: responseDate,
+    perceived_pressure_level: perceivedPressureLevel,
     productivity_focus_level: productivityFocusLevel,
     recovery_rest_level: recoveryRestLevel,
     detachment_level: detachmentLevel,
@@ -796,6 +807,12 @@ export async function saveWeeklyPulse(req, res) {
   const normalizedRecoveryRest = parseLikert(recoveryRestLevel);
   const normalizedDetachment = parseLikert(detachmentLevel);
   const normalizedAccomplishment = parseLikert(accomplishmentLevel);
+  const normalizedPerceivedPressure = perceivedPressureLevel == null
+    ? null
+    : parseLikert(perceivedPressureLevel);
+  const normalizedResponseDate = responseDate == null
+    ? new Date().toISOString().slice(0, 10)
+    : String(responseDate).slice(0, 10);
 
   if (!Number.isInteger(userId) || userId <= 0) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -803,6 +820,12 @@ export async function saveWeeklyPulse(req, res) {
 
   if (!weekStartDate) {
     return res.status(400).json({ message: 'Valid response_date is required' });
+  }
+
+  if (perceivedPressureLevel != null && normalizedPerceivedPressure == null) {
+    return res.status(400).json({
+      message: 'Valid perceived_pressure_level is required'
+    });
   }
 
   if (normalizedProductivityFocus == null) {
@@ -821,52 +844,97 @@ export async function saveWeeklyPulse(req, res) {
     return res.status(400).json({ message: 'Valid accomplishment_level is required' });
   }
 
+  const client = await pool.connect();
+
   try {
-    const userResult = await pool.query(
+    await client.query('BEGIN');
+    const userResult = await client.query(
       'SELECT user_id FROM users WHERE user_id = $1',
       [userId]
     );
 
     if (userResult.rowCount === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const result = await pool.query(
+    const schedule = await getCheckInScheduleStatus(client, {
+      userId,
+      localDate: normalizedResponseDate,
+      forUpdate: true
+    });
+    const dueDate = schedule?.requiredMode === 'weekly'
+      ? schedule.dueDate
+      : weekStartDate;
+    const result = await client.query(
       `INSERT INTO weekly_pulse_responses (
          user_id,
          week_start_date,
+         due_date,
+         response_date,
+         perceived_pressure_level,
          productivity_focus_level,
          recovery_rest_level,
          detachment_level,
-         accomplishment_level
+         accomplishment_level,
+         schema_version
        )
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (user_id, week_start_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (user_id, due_date)
        DO UPDATE SET
+         due_date = EXCLUDED.due_date,
+         response_date = EXCLUDED.response_date,
+         perceived_pressure_level = COALESCE(
+           EXCLUDED.perceived_pressure_level,
+           weekly_pulse_responses.perceived_pressure_level
+         ),
          productivity_focus_level = EXCLUDED.productivity_focus_level,
          recovery_rest_level = EXCLUDED.recovery_rest_level,
          detachment_level = EXCLUDED.detachment_level,
          accomplishment_level = EXCLUDED.accomplishment_level,
+         schema_version = GREATEST(
+           weekly_pulse_responses.schema_version,
+           EXCLUDED.schema_version
+         ),
          updated_at = NOW()
        RETURNING
          pulse_id,
          user_id,
          week_start_date,
+         due_date,
+         response_date,
+         perceived_pressure_level,
          productivity_focus_level,
          recovery_rest_level,
          detachment_level,
          accomplishment_level,
+         schema_version,
          created_at,
          updated_at`,
       [
         userId,
         weekStartDate,
+        dueDate,
+        normalizedResponseDate,
+        normalizedPerceivedPressure,
         normalizedProductivityFocus,
         normalizedRecoveryRest,
         normalizedDetachment,
-        normalizedAccomplishment
+        normalizedAccomplishment,
+        normalizedPerceivedPressure == null ? 1 : 2
       ]
     );
+
+    if (schedule) {
+      await advanceCheckInSchedule(client, {
+        userId,
+        mode: 'weekly',
+        logDate: normalizedResponseDate,
+        dueDate,
+        pulseWeekday: schedule.pulseWeekday
+      });
+    }
+    await client.query('COMMIT');
 
     let burnoutScoresUpdated = 0;
     try {
@@ -887,7 +955,10 @@ export async function saveWeeklyPulse(req, res) {
       response: result.rows[0]
     });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Save weekly pulse error:', error);
     return res.status(500).json({ message: 'Failed to save weekly pulse' });
+  } finally {
+    client.release();
   }
 }

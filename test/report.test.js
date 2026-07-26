@@ -22,15 +22,20 @@ function sampleMetrics() {
   return buildReportMetrics({
     now: NOW,
     logs: [
-      { log_date: dateDaysAgo(0), sleep_hours: 7, mood_index: 0, energy_level: 2, perceived_stress_level: null },
-      { log_date: dateDaysAgo(6), sleep_hours: 8, mood_index: 4, energy_level: 4, perceived_stress_level: 5 },
-      { log_date: dateDaysAgo(7), sleep_hours: 6, mood_index: null, energy_level: null, perceived_stress_level: 3 },
-      { log_date: dateDaysAgo(29), sleep_hours: null, mood_index: null, energy_level: null, perceived_stress_level: null },
-      { log_date: dateDaysAgo(30), sleep_hours: 5, mood_index: 1, energy_level: 2, perceived_stress_level: 4 },
-      { log_date: dateDaysAgo(59), sleep_hours: 7, mood_index: 3, energy_level: 3, perceived_stress_level: 2 },
-      { log_date: dateDaysAgo(60), sleep_hours: 9, mood_index: 4, energy_level: 5, perceived_stress_level: 1 },
-      { log_date: dateDaysAgo(364), sleep_hours: 8, mood_index: 3, energy_level: 4, perceived_stress_level: 2 },
-      { log_date: dateDaysAgo(365), sleep_hours: 2, mood_index: 0, energy_level: 1, perceived_stress_level: 5 },
+      { log_date: dateDaysAgo(0), sleep_hours: 7, mood_index: 0, energy_level: 2 },
+      { log_date: dateDaysAgo(6), sleep_hours: 8, mood_index: 4, energy_level: 4 },
+      { log_date: dateDaysAgo(7), sleep_hours: 6, mood_index: null, energy_level: null },
+      { log_date: dateDaysAgo(29), sleep_hours: null, mood_index: null, energy_level: null },
+      { log_date: dateDaysAgo(30), sleep_hours: 5, mood_index: 1, energy_level: 2 },
+      { log_date: dateDaysAgo(59), sleep_hours: 7, mood_index: 3, energy_level: 3 },
+      { log_date: dateDaysAgo(60), sleep_hours: 9, mood_index: 4, energy_level: 5 },
+      { log_date: dateDaysAgo(364), sleep_hours: 8, mood_index: 3, energy_level: 4 },
+      { log_date: dateDaysAgo(365), sleep_hours: 2, mood_index: 0, energy_level: 1 },
+    ],
+    weeklyPulses: [
+      { response_date: dateDaysAgo(0), perceived_pressure_level: 5, recovery_rest_level: 2, detachment_level: 4, productivity_focus_level: 2, accomplishment_level: 3 },
+      { response_date: dateDaysAgo(14), perceived_pressure_level: 3, recovery_rest_level: 4, detachment_level: 2, productivity_focus_level: 4, accomplishment_level: 4 },
+      { response_date: dateDaysAgo(35), perceived_pressure_level: 2, recovery_rest_level: 4, detachment_level: 2, productivity_focus_level: 4, accomplishment_level: 5 },
     ],
     exercises: [
       { log_date: dateDaysAgo(0), steps: 9000, active_minutes: 35, calories_burned: 400 },
@@ -60,7 +65,10 @@ test('report metrics use exact windows, a 1-5 mood scale, and logged-day activit
   assert.equal(metrics.wellness.year.count, 8);
   assert.equal(metrics.wellness.month.sleep, 7);
   assert.equal(metrics.wellness.month.mood, 3);
-  assert.equal(metrics.wellness.month.stress, 4);
+  assert.equal(metrics.wellness.month.stress, undefined);
+  assert.equal(metrics.pulse.month.count, 2);
+  assert.equal(metrics.pulse.month.pressure, 4);
+  assert.equal(metrics.pulse.month.recoveryRest, 3);
   assert.equal(metrics.activity.week.steps, 9000);
   assert.equal(metrics.activity.week.activeMinutes, 30);
   assert.equal(metrics.activity.week.calories, 200);
@@ -113,7 +121,8 @@ test('report insights describe table values and keep recommendations last in the
   assert.match(documentXml, /The latest burnout result is 82\/100 with a critical status/);
   assert.match(documentXml, /AI-generated highlight/);
   assert.match(documentXml, /Mood averaged 3\/5/);
-  assert.doesNotMatch(documentXml, /\/4/);
+  assert.match(documentXml, /Weekly pulse context/);
+  assert.match(documentXml, /Pressure/);
   assert.match(documentXml, /Avg calories\/logged day/);
 
   for (const color of ['2E7D32', '1565C0', '9A6700', 'C62828', '6A1B9A']) {

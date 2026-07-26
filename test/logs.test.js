@@ -6,6 +6,10 @@ import {
   saveDailyLog,
   saveWeeklyPulse,
 } from '../src/controllers/log.controller.js';
+import {
+  getUnifiedCheckInStatus,
+  saveUnifiedCheckIn,
+} from '../src/controllers/checkIn.controller.js';
 import { createMockResponse } from './controllerTestHelpers.js';
 
 test('daily log fetch requires a valid user id', async () => {
@@ -97,4 +101,49 @@ test('weekly pulse validates Likert values before database work', async () => {
 
   assert.equal(res.statusCode, 400);
   assert.equal(res.body.message, 'Valid productivity_focus_level is required');
+});
+
+test('unified check-in status validates impossible dates before database work', async () => {
+  const res = createMockResponse();
+
+  await getUnifiedCheckInStatus(
+    { query: { user_id: 1, date: '2026-02-30' } },
+    res
+  );
+
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.code, 'INVALID_LOG_DATE');
+});
+
+test('unified check-in validates the short daily contract before database work', async () => {
+  const res = createMockResponse();
+
+  await saveUnifiedCheckIn(
+    {
+      body: {
+        user_id: 1,
+        log_date: '2026-05-18',
+        check_in_type: 'daily',
+        daily: {
+          sleep_hours: 7,
+          sleep_quality: 2,
+          mood_index: 2,
+          energy_level: 3,
+          hydration_liters: 2,
+          workload_hours_band: '3-4 hours',
+          exercise_names: ['Walking'],
+          symptom_names: ['None'],
+          habit_names: [],
+        },
+      },
+      headers: {},
+    },
+    res
+  );
+
+  assert.equal(res.statusCode, 400);
+  assert.equal(
+    res.body.message,
+    'At least one recovery habit selection is required'
+  );
 });

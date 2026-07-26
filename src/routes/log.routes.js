@@ -1,6 +1,11 @@
 import express from 'express';
 
 import {
+  getUnifiedCheckInStatus,
+  saveUnifiedCheckIn
+} from '../controllers/checkIn.controller.js';
+
+import {
   getCurrentStreak,
   getLogHistory,
   getLatestLog,
@@ -12,6 +17,8 @@ import {
 
 const router = express.Router();
 
+router.get('/check-in/status', getUnifiedCheckInStatus);
+router.post('/check-in', saveUnifiedCheckIn);
 router.get('/today', getTodayLog);
 router.get('/latest', getLatestLog);
 router.get('/streak', getCurrentStreak);

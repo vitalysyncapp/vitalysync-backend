@@ -1,10 +1,10 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const PERIODS = {
-  week: { startDay: 0, endDay: 6, expectedDays: 7 },
-  month: { startDay: 0, endDay: 29, expectedDays: 30 },
-  previousMonth: { startDay: 30, endDay: 59, expectedDays: 30 },
-  year: { startDay: 0, endDay: 364, expectedDays: 365 },
+  week: { startDay: 0, endDay: 6, expectedDays: 7, expectedPulses: 1 },
+  month: { startDay: 0, endDay: 29, expectedDays: 30, expectedPulses: 4 },
+  previousMonth: { startDay: 30, endDay: 59, expectedDays: 30, expectedPulses: 4 },
+  year: { startDay: 0, endDay: 364, expectedDays: 365, expectedPulses: 52 },
 };
 
 function dateOnlyUtc(value) {
@@ -58,9 +58,20 @@ function wellnessAverages(rows, expectedDays) {
     sleep: average(rows, 'sleep_hours'),
     mood: average(rows, 'mood_index', 1, (value) => value + 1),
     energy: average(rows, 'energy_level'),
-    stress: average(rows, 'perceived_stress_level'),
     count: rows.length,
     expectedDays,
+  };
+}
+
+function pulseAverages(rows, expectedPulses) {
+  return {
+    pressure: average(rows, 'perceived_pressure_level'),
+    recoveryRest: average(rows, 'recovery_rest_level'),
+    detachment: average(rows, 'detachment_level'),
+    productivityFocus: average(rows, 'productivity_focus_level'),
+    accomplishment: average(rows, 'accomplishment_level'),
+    count: rows.length,
+    expectedPulses,
   };
 }
 
@@ -76,6 +87,7 @@ function activityAverages(rows, expectedDays) {
 
 export function buildReportMetrics({
   logs = [],
+  weeklyPulses = [],
   exercises = [],
   burnoutHistory = [],
   now = new Date(),
@@ -87,12 +99,17 @@ export function buildReportMetrics({
   );
 
   const wellness = {};
+  const pulse = {};
   const activity = {};
 
   for (const [key, period] of Object.entries(PERIODS)) {
     wellness[key] = wellnessAverages(
       filterPeriod(logs, 'log_date', period, todayUtc),
       period.expectedDays,
+    );
+    pulse[key] = pulseAverages(
+      filterPeriod(weeklyPulses, 'response_date', period, todayUtc),
+      period.expectedPulses,
     );
     activity[key] = activityAverages(
       filterPeriod(exercises, 'log_date', period, todayUtc),
@@ -102,6 +119,7 @@ export function buildReportMetrics({
 
   return {
     wellness,
+    pulse,
     activity,
     latestBurnout: burnoutHistory[0] ?? null,
   };

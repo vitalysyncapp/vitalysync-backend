@@ -1,7 +1,7 @@
 const EMOTIONAL_EXHAUSTION_KEYS = ['ee_01', 'ee_02', 'ee_03', 'ee_04', 'ee_05'];
 const DEPERSONALIZATION_KEYS = ['dp_01', 'dp_02', 'dp_03', 'dp_04', 'dp_05'];
 const PERSONAL_ACCOMPLISHMENT_KEYS = ['pa_01', 'pa_02', 'pa_03', 'pa_04', 'pa_05'];
-const PHASE_TWO_SCORING_VERSION = 'phase2_v4';
+const PHASE_THREE_SCORING_VERSION = 'phase3_v1';
 
 const WORKLOAD_HOURS_BAND_RISK = {
   None: 0,
@@ -20,20 +20,17 @@ const EXPECTED_DAILY_SCORE_FIELDS = [
   'daily_logs.energy_level',
   'daily_logs.hydration_liters',
   'daily_logs.workload_hours_band',
-  'daily_logs.perceived_stress_level',
-  'daily_logs.break_quality_level',
-  'daily_logs.daily_detachment_level',
-  'daily_logs.daily_focus_level',
-  'daily_logs.daily_accomplishment_level',
   'daily_logs.exercise_names',
   'daily_logs.symptom_names',
-  'daily_logs.habit_names',
+  'daily_logs.habit_names'
+];
+
+const EXPECTED_WEEKLY_SCORE_FIELDS = [
+  'weekly_pulse_responses.perceived_pressure_level',
   'weekly_pulse_responses.productivity_focus_level',
   'weekly_pulse_responses.recovery_rest_level',
   'weekly_pulse_responses.detachment_level',
-  'weekly_pulse_responses.accomplishment_level',
-  'daily_activity_logs.active_minutes',
-  'daily_activity_logs.goal_completed'
+  'weekly_pulse_responses.accomplishment_level'
 ];
 
 function roundTwo(value) {
@@ -270,6 +267,43 @@ export function addDays(dateString, days) {
   return formatDateOnly(date);
 }
 
+function daysBetween(startDate, endDate) {
+  const start = new Date(`${formatDateOnly(startDate)}T00:00:00.000Z`);
+  const end = new Date(`${formatDateOnly(endDate)}T00:00:00.000Z`);
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return null;
+  }
+
+  return Math.max(
+    0,
+    Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+  );
+}
+
+function weeklyPulseFreshness(weeklyPulse, scoreDate) {
+  if (!weeklyPulse) {
+    return { ageDays: null, freshness: 'not_available' };
+  }
+
+  const ageDays = daysBetween(
+    weeklyPulse.response_date ?? weeklyPulse.week_start_date,
+    scoreDate
+  );
+
+  if (ageDays == null) {
+    return { ageDays: null, freshness: 'unknown' };
+  }
+  if (ageDays <= 8) {
+    return { ageDays, freshness: 'current' };
+  }
+  if (ageDays <= 13) {
+    return { ageDays, freshness: 'aging' };
+  }
+
+  return { ageDays, freshness: 'stale' };
+}
+
 export function getWeekStartDate(value) {
   const date = value instanceof Date ? value : new Date(value);
 
@@ -292,7 +326,6 @@ export function getWeekStartDate(value) {
 function presentFieldMap(inputs) {
   const dailyLog = inputs.dailyLog;
   const weeklyPulse = inputs.weeklyPulse;
-  const activityLog = inputs.activityLog;
 
   return {
     'daily_logs.sleep_hours': dailyLog?.sleep_hours,
@@ -301,39 +334,36 @@ function presentFieldMap(inputs) {
     'daily_logs.energy_level': dailyLog?.energy_level,
     'daily_logs.hydration_liters': dailyLog?.hydration_liters,
     'daily_logs.workload_hours_band': dailyLog?.workload_hours_band,
-    'daily_logs.perceived_stress_level': dailyLog?.perceived_stress_level,
-    'daily_logs.break_quality_level': dailyLog?.break_quality_level,
-    'daily_logs.daily_detachment_level': dailyLog?.daily_detachment_level,
-    'daily_logs.daily_focus_level': dailyLog?.daily_focus_level,
-    'daily_logs.daily_accomplishment_level':
-      dailyLog?.daily_accomplishment_level,
     'daily_logs.exercise_names': dailyLog?.exercise_names,
     'daily_logs.symptom_names': dailyLog?.symptom_names,
     'daily_logs.habit_names': dailyLog?.habit_names,
+    'weekly_pulse_responses.perceived_pressure_level':
+      weeklyPulse?.perceived_pressure_level,
     'weekly_pulse_responses.productivity_focus_level':
       weeklyPulse?.productivity_focus_level,
     'weekly_pulse_responses.recovery_rest_level':
       weeklyPulse?.recovery_rest_level,
     'weekly_pulse_responses.detachment_level': weeklyPulse?.detachment_level,
     'weekly_pulse_responses.accomplishment_level':
-      weeklyPulse?.accomplishment_level,
-    'daily_activity_logs.active_minutes': activityLog?.active_minutes,
-    'daily_activity_logs.goal_completed': activityLog?.goal_completed
+      weeklyPulse?.accomplishment_level
   };
 }
 
 function computeCompleteness(inputs) {
   const fieldMap = presentFieldMap(inputs);
-  const presentFields = EXPECTED_DAILY_SCORE_FIELDS.filter((field) =>
+  const expectedFields = inputs.weeklyPulse
+    ? [...EXPECTED_DAILY_SCORE_FIELDS, ...EXPECTED_WEEKLY_SCORE_FIELDS]
+    : EXPECTED_DAILY_SCORE_FIELDS;
+  const presentFields = expectedFields.filter((field) =>
     isPresent(fieldMap[field])
   );
-  const missingFields = EXPECTED_DAILY_SCORE_FIELDS.filter((field) =>
+  const missingFields = expectedFields.filter((field) =>
     !isPresent(fieldMap[field])
   );
 
   return {
     completenessScore: roundTwo(
-      (presentFields.length / EXPECTED_DAILY_SCORE_FIELDS.length) * 100
+      (presentFields.length / expectedFields.length) * 100
     ),
     dataPointsCount: presentFields.length,
     missingFields
@@ -345,6 +375,7 @@ function compactSourceSnapshot(inputs, risks) {
   const weeklyPulse = inputs.weeklyPulse;
   const activityLog = inputs.activityLog;
   const profile = inputs.profile;
+  const pulseFreshness = weeklyPulseFreshness(weeklyPulse, inputs.scoreDate);
 
   return {
     score_date: inputs.scoreDate,
@@ -357,17 +388,6 @@ function compactSourceSnapshot(inputs, risks) {
           energy_level: toIntegerOrNull(dailyLog.energy_level),
           hydration_liters: toNumberOrNull(dailyLog.hydration_liters),
           workload_hours_band: dailyLog.workload_hours_band,
-          perceived_stress_level: toIntegerOrNull(
-            dailyLog.perceived_stress_level
-          ),
-          break_quality_level: toIntegerOrNull(dailyLog.break_quality_level),
-          daily_detachment_level: toIntegerOrNull(
-            dailyLog.daily_detachment_level
-          ),
-          daily_focus_level: toIntegerOrNull(dailyLog.daily_focus_level),
-          daily_accomplishment_level: toIntegerOrNull(
-            dailyLog.daily_accomplishment_level
-          ),
           exercise_names: Array.isArray(dailyLog.exercise_names)
             ? dailyLog.exercise_names
                 .map((item) => String(item).trim())
@@ -386,6 +406,16 @@ function compactSourceSnapshot(inputs, risks) {
       : null,
     weekly_pulse: weeklyPulse
       ? {
+          week_start_date: formatDateOnly(weeklyPulse.week_start_date),
+          due_date: formatDateOnly(
+            weeklyPulse.due_date ?? weeklyPulse.week_start_date
+          ),
+          response_date: formatDateOnly(
+            weeklyPulse.response_date ?? weeklyPulse.week_start_date
+          ),
+          perceived_pressure_level: toIntegerOrNull(
+            weeklyPulse.perceived_pressure_level
+          ),
           productivity_focus_level: toIntegerOrNull(
             weeklyPulse.productivity_focus_level
           ),
@@ -395,7 +425,10 @@ function compactSourceSnapshot(inputs, risks) {
           detachment_level: toIntegerOrNull(weeklyPulse.detachment_level),
           accomplishment_level: toIntegerOrNull(
             weeklyPulse.accomplishment_level
-          )
+          ),
+          age_days: pulseFreshness.ageDays,
+          freshness: pulseFreshness.freshness,
+          schema_version: toIntegerOrNull(weeklyPulse.schema_version)
         }
       : null,
     activity_log: activityLog
@@ -418,9 +451,9 @@ function compactSourceSnapshot(inputs, risks) {
 function buildContributingFactors(scores, risks) {
   const factors = [
     {
-      key: 'perceived_stress',
-      label: 'Perceived stress',
-      score: risks.stressRisk,
+      key: 'weekly_pressure',
+      label: 'Weekly pressure',
+      score: risks.pressureRisk,
       direction: 'higher_increases_risk'
     },
     {
@@ -442,21 +475,21 @@ function buildContributingFactors(scores, risks) {
       direction: 'higher_increases_risk'
     },
     {
-      key: 'daily_detachment',
-      label: 'Daily detachment',
-      score: risks.dailyDetachmentRisk,
+      key: 'weekly_detachment',
+      label: 'Weekly detachment',
+      score: risks.detachmentRisk,
       direction: 'higher_increases_risk'
     },
     {
-      key: 'daily_focus',
-      label: 'Daily focus',
-      score: risks.dailyFocusRisk,
+      key: 'weekly_focus',
+      label: 'Weekly focus',
+      score: risks.productivityFocusRisk,
       direction: 'higher_increases_risk'
     },
     {
-      key: 'daily_accomplishment',
-      label: 'Daily accomplishment',
-      score: risks.dailyAccomplishmentRisk,
+      key: 'weekly_accomplishment',
+      label: 'Weekly accomplishment',
+      score: risks.accomplishmentRisk,
       direction: 'higher_increases_risk'
     },
     {
@@ -609,8 +642,20 @@ export function calculateDailyBurnoutSnapshot(inputs) {
   const workloadRisk = workloadBandRisk(dailyLog?.workload_hours_band) ??
     riskFromLikertHighRisk(profile?.workload_level);
   const activityRiskValue = activityRisk(activityLog);
+  // Retired daily dimension fields remain as fallbacks for historical rows only.
+  // New check-ins supply these signals through the weekly pulse.
+  const pressureValue = weeklyPulse?.perceived_pressure_level ??
+    dailyLog?.perceived_stress_level;
+  const recoveryRestValue = weeklyPulse?.recovery_rest_level ??
+    dailyLog?.break_quality_level;
+  const detachmentValue = weeklyPulse?.detachment_level ??
+    dailyLog?.daily_detachment_level;
+  const productivityFocusValue = weeklyPulse?.productivity_focus_level ??
+    dailyLog?.daily_focus_level;
+  const accomplishmentValue = weeklyPulse?.accomplishment_level ??
+    dailyLog?.daily_accomplishment_level;
   const risks = {
-    stressRisk: riskFromLikertHighRisk(dailyLog?.perceived_stress_level),
+    pressureRisk: riskFromLikertHighRisk(pressureValue),
     workloadRisk,
     sleepDurationRisk: sleepDurationRisk(dailyLog?.sleep_hours),
     sleepQualityRisk: riskFromZeroIndexedHighGood(dailyLog?.sleep_quality, 4),
@@ -619,22 +664,10 @@ export function calculateDailyBurnoutSnapshot(inputs) {
     hydrationRisk: hydrationRisk(dailyLog?.hydration_liters),
     symptomRisk: symptomsRisk(dailyLog?.symptom_names),
     habitRecoveryRisk: habitRecoveryRisk(dailyLog?.habit_names),
-    breakQualityRisk: riskFromLikertHighGood(dailyLog?.break_quality_level),
-    productivityFocusRisk: riskFromLikertHighGood(
-      weeklyPulse?.productivity_focus_level
-    ),
-    recoveryRestRisk: riskFromLikertHighGood(weeklyPulse?.recovery_rest_level),
-    detachmentRisk: riskFromLikertHighRisk(weeklyPulse?.detachment_level),
-    accomplishmentRisk: riskFromLikertHighGood(
-      weeklyPulse?.accomplishment_level
-    ),
-    dailyDetachmentRisk: riskFromLikertHighRisk(
-      dailyLog?.daily_detachment_level
-    ),
-    dailyFocusRisk: riskFromLikertHighGood(dailyLog?.daily_focus_level),
-    dailyAccomplishmentRisk: riskFromLikertHighGood(
-      dailyLog?.daily_accomplishment_level
-    ),
+    productivityFocusRisk: riskFromLikertHighGood(productivityFocusValue),
+    recoveryRestRisk: riskFromLikertHighGood(recoveryRestValue),
+    detachmentRisk: riskFromLikertHighRisk(detachmentValue),
+    accomplishmentRisk: riskFromLikertHighGood(accomplishmentValue),
     activityRisk: activityRiskValue,
     movementRisk: activityRiskValue ??
       exerciseSelectionRisk(dailyLog?.exercise_names),
@@ -642,47 +675,44 @@ export function calculateDailyBurnoutSnapshot(inputs) {
   };
 
   const emotionalExhaustionScore = weightedAverage([
-    { score: risks.stressRisk, weight: 0.28 },
-    { score: risks.energyRisk, weight: 0.18 },
-    { score: risks.sleepQualityRisk, weight: 0.14 },
-    { score: risks.sleepDurationRisk, weight: 0.12 },
-    { score: risks.moodRisk, weight: 0.12 },
-    { score: risks.workloadRisk, weight: 0.10 },
-    { score: risks.symptomRisk, weight: 0.06 }
+    { score: risks.pressureRisk, weight: 0.28 },
+    { score: risks.energyRisk, weight: 0.22 },
+    { score: risks.sleepQualityRisk, weight: 0.16 },
+    { score: risks.sleepDurationRisk, weight: 0.13 },
+    { score: risks.moodRisk, weight: 0.13 },
+    { score: risks.workloadRisk, weight: 0.05 },
+    { score: risks.symptomRisk, weight: 0.03 }
   ]);
 
   const detachmentScore = weightedAverage([
-    { score: risks.detachmentRisk, weight: 0.35 },
-    { score: risks.dailyDetachmentRisk, weight: 0.30 },
-    { score: risks.breakQualityRisk, weight: 0.10 },
-    { score: risks.habitRecoveryRisk, weight: 0.10 },
+    { score: risks.detachmentRisk, weight: 0.55 },
+    { score: risks.recoveryRestRisk, weight: 0.15 },
+    { score: risks.habitRecoveryRisk, weight: 0.12 },
     { score: risks.hydrationRisk, weight: 0.05 },
-    { score: risks.moodRisk, weight: 0.05 },
-    { score: risks.stressRisk, weight: 0.05 }
+    { score: risks.moodRisk, weight: 0.08 },
+    { score: risks.pressureRisk, weight: 0.05 }
   ]);
 
   const reducedAccomplishmentScore = weightedAverage([
-    { score: risks.productivityFocusRisk, weight: 0.25 },
-    { score: risks.accomplishmentRisk, weight: 0.25 },
-    { score: risks.dailyFocusRisk, weight: 0.25 },
-    { score: risks.dailyAccomplishmentRisk, weight: 0.20 },
-    { score: risks.workloadRisk, weight: 0.03 },
-    { score: risks.movementRisk, weight: 0.02 }
+    { score: risks.productivityFocusRisk, weight: 0.42 },
+    { score: risks.accomplishmentRisk, weight: 0.42 },
+    { score: risks.workloadRisk, weight: 0.08 },
+    { score: risks.movementRisk, weight: 0.08 }
   ]);
 
   const recoveryDeficitScore = weightedAverage([
-    { score: risks.breakQualityRisk, weight: 0.40 },
-    { score: risks.recoveryRestRisk, weight: 0.30 },
-    { score: risks.sleepDurationRisk, weight: 0.12 },
+    { score: risks.recoveryRestRisk, weight: 0.42 },
+    { score: risks.sleepDurationRisk, weight: 0.18 },
+    { score: risks.sleepQualityRisk, weight: 0.12 },
     { score: risks.hydrationRisk, weight: 0.08 },
     { score: risks.movementRisk, weight: 0.10 },
-    { score: risks.habitRecoveryRisk, weight: 0.08 }
+    { score: risks.habitRecoveryRisk, weight: 0.10 }
   ]);
 
   const workloadStrainScore = weightedAverage([
-    { score: risks.workloadRisk, weight: 0.60 },
-    { score: risks.stressRisk, weight: 0.25 },
-    { score: recoveryDeficitScore, weight: 0.15 }
+    { score: risks.workloadRisk, weight: 0.65 },
+    { score: risks.pressureRisk, weight: 0.25 },
+    { score: recoveryDeficitScore, weight: 0.10 }
   ]);
 
   const behavioralComposite = weightedAverage([
@@ -701,8 +731,13 @@ export function calculateDailyBurnoutSnapshot(inputs) {
     ? roundTwo((behavioralComposite * 0.9) + (baselineRisk * 0.1))
     : behavioralComposite;
   const completeness = computeCompleteness(inputs);
+  const pulseFreshness = weeklyPulseFreshness(weeklyPulse, inputs.scoreDate);
   const sourceBreadthMultiplier = dailyLog && weeklyPulse
-    ? 1
+    ? pulseFreshness.freshness === 'current'
+      ? 1
+      : pulseFreshness.freshness === 'aging'
+        ? 0.94
+        : 0.82
     : dailyLog
       ? 0.9
       : weeklyPulse
@@ -735,6 +770,6 @@ export function calculateDailyBurnoutSnapshot(inputs) {
     missing_fields: completeness.missingFields,
     contributing_factors: buildContributingFactors(scores, risks),
     source_snapshot: compactSourceSnapshot(inputs, risks),
-    scoring_version: PHASE_TWO_SCORING_VERSION
+    scoring_version: PHASE_THREE_SCORING_VERSION
   };
 }

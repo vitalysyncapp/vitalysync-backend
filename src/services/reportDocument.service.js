@@ -204,7 +204,7 @@ function burnoutTable(metrics) {
 }
 
 function wellnessTable(metrics) {
-  const widths = [2300, 1800, 1800, 1800, 1800, TABLE_WIDTH - 9500];
+  const widths = [2700, 1900, 1900, 1900, TABLE_WIDTH - 8400];
   const rows = PERIOD_ROWS.map(([key, label]) => {
     const period = metrics.wellness[key];
     return new TableRow({
@@ -214,12 +214,11 @@ function wellnessTable(metrics) {
         semanticCell(format(period.sleep, ' h'), 'sleep', period.sleep, widths[1]),
         semanticCell(format(period.mood, '/5'), 'mood', period.mood, widths[2]),
         semanticCell(format(period.energy, '/5'), 'energy', period.energy, widths[3]),
-        semanticCell(format(period.stress, '/5'), 'stress', period.stress, widths[4]),
         semanticCell(
           `${period.count}/${period.expectedDays}`,
           'coverage',
           period.count / period.expectedDays,
-          widths[5],
+          widths[4],
           { compactCoverageLabel: true },
         ),
       ],
@@ -227,7 +226,38 @@ function wellnessTable(metrics) {
   });
 
   return reportTable(
-    ['Period', 'Sleep', 'Mood', 'Energy', 'Stress', 'Logged days'],
+    ['Period', 'Sleep', 'Mood', 'Energy', 'Logged days'],
+    widths,
+    rows,
+  );
+}
+
+function weeklyPulseTable(metrics) {
+  const widths = [1800, 1450, 1450, 1450, 1450, 1450, TABLE_WIDTH - 9050];
+  const rows = PERIOD_ROWS.map(([key, label]) => {
+    const period = metrics.pulse[key];
+    return new TableRow({
+      cantSplit: true,
+      children: [
+        plainCell(label, widths[0]),
+        semanticCell(format(period.pressure, '/5'), 'stress', period.pressure, widths[1]),
+        semanticCell(format(period.recoveryRest, '/5'), 'likertHighGood', period.recoveryRest, widths[2]),
+        semanticCell(format(period.detachment, '/5'), 'stress', period.detachment, widths[3]),
+        semanticCell(format(period.productivityFocus, '/5'), 'likertHighGood', period.productivityFocus, widths[4]),
+        semanticCell(format(period.accomplishment, '/5'), 'likertHighGood', period.accomplishment, widths[5]),
+        semanticCell(
+          `${period.count}/${period.expectedPulses}`,
+          'coverage',
+          period.count / period.expectedPulses,
+          widths[6],
+          { compactCoverageLabel: true },
+        ),
+      ],
+    });
+  });
+
+  return reportTable(
+    ['Period', 'Pressure', 'Recovery', 'Detachment', 'Focus', 'Accomplishment', 'Pulses'],
     widths,
     rows,
   );
@@ -379,6 +409,11 @@ export async function buildUserReportDocx({
     wellnessTable(metrics),
     insightParagraph(insights.sections.wellness.insight, insights.sections.wellness.level),
     ...signalsBlock(insights.sections.wellness),
+
+    heading('Weekly pulse context'),
+    weeklyPulseTable(metrics),
+    insightParagraph(insights.sections.pulse.insight, insights.sections.pulse.level),
+    ...signalsBlock(insights.sections.pulse),
 
     heading('Exercise and activity'),
     activityTable(metrics),

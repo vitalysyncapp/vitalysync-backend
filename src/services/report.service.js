@@ -6,15 +6,24 @@ import { buildReportInsights } from './reportInsights.service.js';
 import { buildReportMetrics } from './reportMetrics.service.js';
 
 async function loadReportRows(userId) {
-  const [logsResult, burnoutResult, exerciseResult] = await Promise.all([
+  const [logsResult, pulseResult, burnoutResult, exerciseResult] = await Promise.all([
     pool.query(
       `SELECT
-         log_date, sleep_hours, sleep_quality, mood_index, energy_level,
-         perceived_stress_level
+         log_date, sleep_hours, sleep_quality, mood_index, energy_level
        FROM daily_logs
        WHERE user_id = $1
          AND log_date >= (CURRENT_DATE - INTERVAL '364 days')
        ORDER BY log_date DESC`,
+      [userId],
+    ),
+    pool.query(
+      `SELECT
+         response_date, perceived_pressure_level, recovery_rest_level,
+         detachment_level, productivity_focus_level, accomplishment_level
+       FROM weekly_pulse_responses
+       WHERE user_id = $1
+         AND response_date >= (CURRENT_DATE - INTERVAL '364 days')
+       ORDER BY response_date DESC`,
       [userId],
     ),
     pool.query(
@@ -42,6 +51,7 @@ async function loadReportRows(userId) {
 
   return {
     logs: logsResult.rows,
+    weeklyPulses: pulseResult.rows,
     burnoutHistory: burnoutResult.rows,
     exercises: exerciseResult.rows,
   };

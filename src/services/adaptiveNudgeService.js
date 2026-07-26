@@ -145,6 +145,7 @@ function buildRecommendation({
   summary,
   metadata = {}
 }) {
+  const weeklyContext = summary?.latest_score?.source_snapshot?.weekly_pulse;
   return {
     nudge_type: nudgeType,
     priority,
@@ -162,6 +163,8 @@ function buildRecommendation({
       pattern_title: pattern?.title ?? null,
       adaptive_state: summary?.adaptive_state?.state ?? null,
       latest_risk_level: summary?.latest_score?.risk_level ?? null,
+      weekly_context_response_date: weeklyContext?.response_date ?? null,
+      weekly_context_freshness: weeklyContext?.freshness ?? 'not_available',
       recommended_focus: recommendedFocus,
       ...metadata
     }
@@ -282,7 +285,7 @@ function recommendationFromPattern(pattern, summary) {
         priority,
         title: 'Make progress visible',
         message:
-          'Progress feels like the hard part today. Pick one small task you can finish and mark it done.',
+          'Recent weekly context suggests progress has felt harder. Pick one small task you can finish and mark it done.',
         actionLabel: 'Choose one win',
         triggerReason: pattern.title,
         recommendedFocus: 'progress',
@@ -295,8 +298,8 @@ function recommendationFromPattern(pattern, summary) {
         priority: 'low',
         title: 'Improve recommendation quality',
         message:
-          "A few missing check-in details make nudges less precise. Finish today's log when you can.",
-        actionLabel: 'Complete log',
+          'Limited daily coverage or weekly context makes nudges less precise. Complete the check-in currently due when you can.',
+        actionLabel: 'Complete check-in',
         triggerReason: pattern.title,
         recommendedFocus: 'data_completion',
         pattern,
@@ -344,9 +347,12 @@ function recommendationFromPattern(pattern, summary) {
   }
 }
 
-function stateRecommendation(summary) {
+export function stateRecommendation(summary) {
   const state = summary.adaptive_state?.state;
   const latest = summary.latest_score;
+  if (normalizeConfidence(summary) < 55) {
+    return null;
+  }
 
   if (state === 'critical' || latest?.risk_level === 'critical') {
     return buildRecommendation({

@@ -82,6 +82,13 @@ export function classifyReportMetric(metric, value) {
     return status('high');
   }
 
+  if (metric === 'likertHighGood') {
+    if (number >= 4) return status('good');
+    if (number >= 3) return status('okay');
+    if (number >= 2) return status('warning');
+    return status('high');
+  }
+
   if (metric === 'steps') {
     if (number >= 8000) return status('good');
     if (number >= 5000) return status('okay');
@@ -183,7 +190,7 @@ function wellnessSection(wellness) {
   if (!current || current.count === 0) {
     return {
       level: 'unknown',
-      insight: 'No wellness logs were recorded in the last 30 days, so recent sleep, mood, energy, and stress patterns cannot be compared.',
+      insight: 'No short daily logs were recorded in the last 30 days, so recent sleep, mood, and energy patterns cannot be compared.',
       signals: [signal('coverage', 'No wellness logs were recorded in the last 30 days.', null)],
     };
   }
@@ -192,7 +199,6 @@ function wellnessSection(wellness) {
     signal('sleep', `Sleep averaged ${format(current.sleep, ' hours')} across the last 30 days.`, current.sleep),
     signal('mood', `Mood averaged ${format(current.mood, '/5')} across the last 30 days.`, current.mood),
     signal('energy', `Energy averaged ${format(current.energy, '/5')} across the last 30 days.`, current.energy),
-    signal('stress', `Stress averaged ${format(current.stress, '/5')} across the last 30 days.`, current.stress),
     signal(
       'coverage',
       `${current.count} of ${current.expectedDays} days include a wellness log.`,
@@ -201,13 +207,42 @@ function wellnessSection(wellness) {
   ];
   const comparisons = [
     changeSentence(current.sleep, previous?.sleep, 'Sleep', { suffix: ' hours' }),
-    changeSentence(current.stress, previous?.stress, 'Stress', { lowerIsBetter: true }),
   ].filter(Boolean);
   const comparisonText = comparisons.length > 0 ? ` ${comparisons.join(' ')}` : '';
 
   return {
-    level: highestLevel(signals.slice(0, 4)),
-    insight: `Across ${current.count} logged days, the 30-day averages are ${format(current.sleep, ' hours')} of sleep, ${format(current.mood, '/5')} mood, ${format(current.energy, '/5')} energy, and ${format(current.stress, '/5')} stress.${comparisonText}`,
+    level: highestLevel(signals.slice(0, 3)),
+    insight: `Across ${current.count} short daily logs, the 30-day averages are ${format(current.sleep, ' hours')} of sleep, ${format(current.mood, '/5')} mood, and ${format(current.energy, '/5')} energy.${comparisonText}`,
+    signals,
+  };
+}
+
+function pulseSection(pulse) {
+  const current = pulse.month;
+  if (!current || current.count === 0) {
+    return {
+      level: 'unknown',
+      insight: 'No weekly pulse was recorded in the last 30 days, so pressure, recovery, detachment, focus, and accomplishment context is unavailable.',
+      signals: [signal('coverage', 'No weekly pulse was recorded in the last 30 days.', null)],
+    };
+  }
+
+  const signals = [
+    signal('stress', `Pressure averaged ${format(current.pressure, '/5')} across recent weekly pulses.`, current.pressure),
+    signal('likertHighGood', `Recovery and rest averaged ${format(current.recoveryRest, '/5')}.`, current.recoveryRest),
+    signal('stress', `Detachment averaged ${format(current.detachment, '/5')}.`, current.detachment),
+    signal('likertHighGood', `Focus averaged ${format(current.productivityFocus, '/5')}.`, current.productivityFocus),
+    signal('likertHighGood', `Accomplishment averaged ${format(current.accomplishment, '/5')}.`, current.accomplishment),
+    signal(
+      'coverage',
+      `${current.count} of ${current.expectedPulses} expected weekly pulses are available.`,
+      current.count / current.expectedPulses,
+    ),
+  ];
+
+  return {
+    level: highestLevel(signals.slice(0, 5)),
+    insight: `Across ${current.count} weekly pulse${current.count === 1 ? '' : 's'}, pressure averaged ${format(current.pressure, '/5')}, recovery ${format(current.recoveryRest, '/5')}, detachment ${format(current.detachment, '/5')}, focus ${format(current.productivityFocus, '/5')}, and accomplishment ${format(current.accomplishment, '/5')}.`,
     signals,
   };
 }
@@ -249,6 +284,7 @@ function activitySection(activity) {
 function recommendationsFor(sections, metrics) {
   const recommendations = [];
   const month = metrics.wellness.month;
+  const pulseMonth = metrics.pulse.month;
   const activityMonth = metrics.activity.month;
 
   if (sections.burnout.level === 'high' || sections.burnout.level === 'warning') {
@@ -257,19 +293,19 @@ function recommendationsFor(sections, metrics) {
   if (classifyReportMetric('sleep', month?.sleep).level === 'warning' || classifyReportMetric('sleep', month?.sleep).level === 'high') {
     recommendations.push('Choose one realistic sleep routine to repeat consistently, such as a regular wind-down time or a steadier wake time.');
   }
-  if (classifyReportMetric('stress', month?.stress).level === 'warning' || classifyReportMetric('stress', month?.stress).level === 'high') {
-    recommendations.push('Plan short recovery pauses around the most demanding part of the day and note whether stress changes over the next week.');
+  if (classifyReportMetric('stress', pulseMonth?.pressure).level === 'warning' || classifyReportMetric('stress', pulseMonth?.pressure).level === 'high') {
+    recommendations.push('Plan short recovery pauses around the most demanding part of the week and compare pressure at the next weekly pulse.');
   }
   if (classifyReportMetric('activeMinutes', activityMonth?.activeMinutes).level === 'warning' || classifyReportMetric('activeMinutes', activityMonth?.activeMinutes).level === 'high') {
     recommendations.push('Add a manageable block of movement to a routine you already have, then increase it gradually if it feels sustainable.');
   }
-  if ((month?.count ?? 0) < 8 || (activityMonth?.count ?? 0) < 8) {
-    recommendations.push('Log wellness and activity more consistently so future comparisons are based on a clearer pattern.');
+  if ((month?.count ?? 0) < 8 || (activityMonth?.count ?? 0) < 8 || (pulseMonth?.count ?? 0) < 2) {
+    recommendations.push('Keep short daily logs and weekly pulses consistent so future comparisons are based on a clearer pattern.');
   }
 
   if (recommendations.length === 0) {
     recommendations.push('Keep the routines that support your current pattern and continue logging so changes are easier to notice early.');
-    recommendations.push('Review the next 30-day report for meaningful shifts in sleep, stress, energy, and activity rather than reacting to a single day.');
+    recommendations.push('Review the next 30-day report for meaningful shifts in daily signals, weekly context, and activity rather than reacting to one entry.');
   }
 
   return recommendations.slice(0, 3);
@@ -279,6 +315,7 @@ export function buildReportInsights(metrics) {
   const sections = {
     burnout: burnoutSection(metrics.latestBurnout),
     wellness: wellnessSection(metrics.wellness),
+    pulse: pulseSection(metrics.pulse),
     activity: activitySection(metrics.activity),
   };
   const overallLevel = highestLevel(Object.values(sections));
