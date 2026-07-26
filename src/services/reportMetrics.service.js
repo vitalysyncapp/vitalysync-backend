@@ -28,12 +28,13 @@ function filterPeriod(rows, dateField, period, todayUtc) {
   });
 }
 
-function average(rows, field, digits = 1) {
+function average(rows, field, digits = 1, transform = (value) => value) {
   const values = rows
     .map((row) => row[field])
     .filter((value) => value !== null && value !== undefined && value !== '')
     .map(Number)
-    .filter(Number.isFinite);
+    .filter(Number.isFinite)
+    .map(transform);
 
   if (values.length === 0) return null;
 
@@ -41,10 +42,21 @@ function average(rows, field, digits = 1) {
   return Number(result.toFixed(digits));
 }
 
+function averageAcrossLoggedDays(rows, field, digits = 0) {
+  if (rows.length === 0) return null;
+
+  const total = rows.reduce((sum, row) => {
+    const value = Number(row[field]);
+    return sum + (Number.isFinite(value) ? value : 0);
+  }, 0);
+
+  return Number((total / rows.length).toFixed(digits));
+}
+
 function wellnessAverages(rows, expectedDays) {
   return {
     sleep: average(rows, 'sleep_hours'),
-    mood: average(rows, 'mood_index'),
+    mood: average(rows, 'mood_index', 1, (value) => value + 1),
     energy: average(rows, 'energy_level'),
     stress: average(rows, 'perceived_stress_level'),
     count: rows.length,
@@ -56,7 +68,7 @@ function activityAverages(rows, expectedDays) {
   return {
     steps: average(rows, 'steps', 0),
     activeMinutes: average(rows, 'active_minutes', 0),
-    calories: average(rows, 'calories_burned', 0),
+    calories: averageAcrossLoggedDays(rows, 'calories_burned'),
     count: rows.length,
     expectedDays,
   };

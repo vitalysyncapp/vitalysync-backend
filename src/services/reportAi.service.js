@@ -30,7 +30,7 @@ export async function generateReportAiContent(metrics, {
         },
         {
           role: 'user',
-          content: `Use only the aggregated report data below. Write a concise highlight that connects the values or changes in the tables, plus 2-3 practical recommendations. If data is missing, acknowledge that instead of treating it as zero. Mood is scored 0-4; energy and stress are scored 1-5; burnout values are 0-100.\n\nReport data:\n${JSON.stringify(reportData)}\n\nReturn JSON with keys "highlight" (one or two sentences) and "recommendations" (an array of 2-3 short strings).`,
+          content: `Use only the aggregated report data below. Write a concise highlight that connects the values or changes in the tables, plus 2-3 practical recommendations. If data is missing, acknowledge that instead of treating it as zero. Mood, energy, and stress are reported on 1-5 scales; burnout values are 0-100. Activity averages use logged days within each period, not every calendar day.\n\nReport data:\n${JSON.stringify(reportData)}\n\nReturn JSON with keys "highlight" (one or two sentences) and "recommendations" (an array of 2-3 short strings).`,
         },
       ],
       response_format: { type: 'json_object' },

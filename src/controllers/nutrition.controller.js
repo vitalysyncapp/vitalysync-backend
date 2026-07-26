@@ -202,15 +202,59 @@ export async function analyzeNutrition(req, res) {
       items,
     });
   } catch (error) {
-    console.error('Analyze nutrition error:', error);
-    return res.status(500).json({
-      message: error.message?.includes('configured')
-        ? error.message
-        : inputType === 'manual'
-          ? 'Failed to analyze manual food log'
-          : 'Failed to analyze food image',
+    console.error('Analyze nutrition error:', {
+      name: error?.name,
+      code: error?.code,
+      status: error?.status,
+      message: error?.message,
     });
+    const failure = nutritionAnalysisFailure(error, inputType);
+    return res.status(failure.status).json({ message: failure.message });
   }
+}
+
+export function nutritionAnalysisFailure(error, inputType) {
+  const errorMessage = String(error?.message ?? '').toLowerCase();
+  const upstreamStatus = Number(error?.status ?? error?.statusCode);
+  const isManual = inputType === 'manual';
+
+  if (errorMessage.includes('openai_api_key is not configured')) {
+    return {
+      status: 503,
+      message: 'Nutrition analysis is not configured on this server',
+    };
+  }
+
+  if (
+    !isManual &&
+    upstreamStatus === 400 &&
+    /image|format|decode|base64/.test(errorMessage)
+  ) {
+    return {
+      status: 422,
+      message: 'This food photo could not be processed. Try a clear JPEG or PNG photo',
+    };
+  }
+
+  if (
+    upstreamStatus === 401 ||
+    upstreamStatus === 403 ||
+    upstreamStatus === 429 ||
+    upstreamStatus >= 500 ||
+    /timeout|timed out|connection/.test(errorMessage)
+  ) {
+    return {
+      status: 503,
+      message: 'Nutrition analysis is temporarily unavailable. Please try again shortly',
+    };
+  }
+
+  return {
+    status: 500,
+    message: isManual
+      ? 'Failed to analyze manual food log'
+      : 'Failed to analyze food image',
+  };
 }
 
 export async function confirmNutrition(req, res) {

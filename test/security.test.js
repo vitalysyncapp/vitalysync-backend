@@ -188,15 +188,19 @@ test('multipart nutrition upload rejects fake images and parsed user mismatches'
     });
     assert.equal(fakeImageResponse.status, 400);
 
-    const validPng = Uint8Array.from([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-      0x00, 0x00, 0x00, 0x0d,
-    ]);
+    const validPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64'
+    );
     const mismatchedUser = new FormData();
     mismatchedUser.set('user_id', '2');
     mismatchedUser.set('meal_type', 'breakfast');
     mismatchedUser.set('log_date', '2026-07-19');
-    mismatchedUser.set('image', new Blob([validPng], { type: 'image/png' }), 'meal.png');
+    mismatchedUser.set(
+      'image',
+      new Blob([validPng], { type: 'application/octet-stream' }),
+      'meal.png'
+    );
 
     const mismatchResponse = await fetch(`${baseUrl}/api/nutrition/analyze`, {
       method: 'POST',
@@ -204,6 +208,57 @@ test('multipart nutrition upload rejects fake images and parsed user mismatches'
       body: mismatchedUser,
     });
     assert.equal(mismatchResponse.status, 403);
+
+    const heicImage = Uint8Array.from([
+      0x00, 0x00, 0x00, 0x18,
+      0x66, 0x74, 0x79, 0x70,
+      0x68, 0x65, 0x69, 0x63,
+    ]);
+    const unsupportedImage = new FormData();
+    unsupportedImage.set('user_id', '1');
+    unsupportedImage.set('meal_type', 'breakfast');
+    unsupportedImage.set('log_date', '2026-07-19');
+    unsupportedImage.set(
+      'image',
+      new Blob([heicImage], { type: 'image/heic' }),
+      'meal.heic'
+    );
+
+    const unsupportedResponse = await fetch(
+      `${baseUrl}/api/nutrition/analyze`,
+      { method: 'POST', headers, body: unsupportedImage }
+    );
+    assert.equal(unsupportedResponse.status, 415);
+    assert.deepEqual(await unsupportedResponse.json(), {
+      message: 'Use a JPEG, PNG, or WebP food photo',
+    });
+  });
+});
+
+test('multipart nutrition upload rejects oversized food photos clearly', async () => {
+  await withServer(app, async (baseUrl) => {
+    const form = new FormData();
+    form.set('user_id', '1');
+    form.set('meal_type', 'lunch');
+    form.set('log_date', '2026-07-19');
+    form.set(
+      'image',
+      new Blob([new Uint8Array((8 * 1024 * 1024) + 1)], {
+        type: 'image/jpeg',
+      }),
+      'large-meal.jpg'
+    );
+
+    const response = await fetch(`${baseUrl}/api/nutrition/analyze`, {
+      method: 'POST',
+      headers: { authorization: bearerFor(1) },
+      body: form,
+    });
+
+    assert.equal(response.status, 413);
+    assert.deepEqual(await response.json(), {
+      message: 'Food photo must be smaller than 8 MB',
+    });
   });
 });
 

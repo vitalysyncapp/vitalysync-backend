@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   analyzeNutrition,
   confirmNutrition,
+  nutritionAnalysisFailure,
 } from '../src/controllers/nutrition.controller.js';
 import {
   calculateTotals,
@@ -275,6 +276,36 @@ test('nutrition analysis validates required image input before database work', a
 
   assert.equal(res.statusCode, 400);
   assert.equal(res.body.message, 'Food image is required');
+});
+
+test('nutrition analysis maps scanner failures to safe actionable responses', () => {
+  assert.deepEqual(
+    nutritionAnalysisFailure(
+      new Error('OPENAI_API_KEY is not configured'),
+      'image'
+    ),
+    {
+      status: 503,
+      message: 'Nutrition analysis is not configured on this server',
+    }
+  );
+  assert.deepEqual(
+    nutritionAnalysisFailure(
+      Object.assign(new Error('Invalid image format'), { status: 400 }),
+      'image'
+    ),
+    {
+      status: 422,
+      message: 'This food photo could not be processed. Try a clear JPEG or PNG photo',
+    }
+  );
+  assert.equal(
+    nutritionAnalysisFailure(
+      Object.assign(new Error('request timed out'), { status: 408 }),
+      'manual'
+    ).status,
+    503
+  );
 });
 
 test('nutrition confirmation requires reviewed food items before database work', async () => {

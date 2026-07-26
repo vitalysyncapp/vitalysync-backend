@@ -62,9 +62,9 @@ export function classifyReportMetric(metric, value) {
   }
 
   if (metric === 'mood') {
-    if (number >= 3) return status('good');
-    if (number >= 2) return status('okay');
-    if (number >= 1) return status('warning');
+    if (number >= 4) return status('good');
+    if (number >= 3) return status('okay');
+    if (number >= 2) return status('warning');
     return status('high');
   }
 
@@ -190,7 +190,7 @@ function wellnessSection(wellness) {
 
   const signals = [
     signal('sleep', `Sleep averaged ${format(current.sleep, ' hours')} across the last 30 days.`, current.sleep),
-    signal('mood', `Mood averaged ${format(current.mood, '/4')} across the last 30 days.`, current.mood),
+    signal('mood', `Mood averaged ${format(current.mood, '/5')} across the last 30 days.`, current.mood),
     signal('energy', `Energy averaged ${format(current.energy, '/5')} across the last 30 days.`, current.energy),
     signal('stress', `Stress averaged ${format(current.stress, '/5')} across the last 30 days.`, current.stress),
     signal(
@@ -207,7 +207,7 @@ function wellnessSection(wellness) {
 
   return {
     level: highestLevel(signals.slice(0, 4)),
-    insight: `Across ${current.count} logged days, the 30-day averages are ${format(current.sleep, ' hours')} of sleep, ${format(current.mood, '/4')} mood, ${format(current.energy, '/5')} energy, and ${format(current.stress, '/5')} stress.${comparisonText}`,
+    insight: `Across ${current.count} logged days, the 30-day averages are ${format(current.sleep, ' hours')} of sleep, ${format(current.mood, '/5')} mood, ${format(current.energy, '/5')} energy, and ${format(current.stress, '/5')} stress.${comparisonText}`,
     signals,
   };
 }

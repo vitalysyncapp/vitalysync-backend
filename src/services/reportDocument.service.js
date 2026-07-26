@@ -16,6 +16,7 @@ import {
   VerticalAlign,
   WidthType,
 } from 'docx';
+import { readFile } from 'node:fs/promises';
 
 import { classifyReportMetric } from './reportInsights.service.js';
 
@@ -24,6 +25,8 @@ const PAGE_HEIGHT = 15840;
 const ONE_CENTIMETER = 567;
 const TABLE_INDENT = 120;
 const TABLE_WIDTH = PAGE_WIDTH - (ONE_CENTIMETER * 2) - TABLE_INDENT;
+const REPORT_FONT = 'Inter';
+const REPORT_FONT_URL = new URL('../../assets/fonts/Inter-Regular.ttf', import.meta.url);
 
 const COLORS = {
   ink: '1F2937',
@@ -56,7 +59,7 @@ const PERIOD_ROWS = [
 function run(text, options = {}) {
   return new TextRun({
     text: String(text),
-    font: 'Arial',
+    font: REPORT_FONT,
     size: 21,
     color: COLORS.ink,
     ...options,
@@ -209,7 +212,7 @@ function wellnessTable(metrics) {
       children: [
         plainCell(label, widths[0]),
         semanticCell(format(period.sleep, ' h'), 'sleep', period.sleep, widths[1]),
-        semanticCell(format(period.mood, '/4'), 'mood', period.mood, widths[2]),
+        semanticCell(format(period.mood, '/5'), 'mood', period.mood, widths[2]),
         semanticCell(format(period.energy, '/5'), 'energy', period.energy, widths[3]),
         semanticCell(format(period.stress, '/5'), 'stress', period.stress, widths[4]),
         semanticCell(
@@ -231,15 +234,27 @@ function wellnessTable(metrics) {
 }
 
 function activityTable(metrics) {
-  const widths = [2500, 2100, 2400, 1900, TABLE_WIDTH - 8900];
+  const widths = [2400, 2100, 2300, 2300, TABLE_WIDTH - 9100];
   const rows = PERIOD_ROWS.map(([key, label]) => {
     const period = metrics.activity[key];
     return new TableRow({
       cantSplit: true,
       children: [
         plainCell(label, widths[0]),
-        semanticCell(format(period.steps), 'steps', period.steps, widths[1]),
-        semanticCell(format(period.activeMinutes, ' min'), 'activeMinutes', period.activeMinutes, widths[2]),
+        semanticCell(
+          format(period.steps),
+          'steps',
+          period.steps,
+          widths[1],
+          { appendLabel: false },
+        ),
+        semanticCell(
+          format(period.activeMinutes, ' min'),
+          'activeMinutes',
+          period.activeMinutes,
+          widths[2],
+          { appendLabel: false },
+        ),
         plainCell(format(period.calories), widths[3], AlignmentType.CENTER),
         semanticCell(
           `${period.count}/${period.expectedDays}`,
@@ -253,7 +268,7 @@ function activityTable(metrics) {
   });
 
   return reportTable(
-    ['Period', 'Avg steps/day', 'Avg active time', 'Avg calories', 'Logged days'],
+    ['Period', 'Avg steps/day', 'Avg active time', 'Avg calories/logged day', 'Logged days'],
     widths,
     rows,
   );
@@ -383,10 +398,11 @@ export async function buildUserReportDocx({
   ];
 
   const doc = new Document({
+    fonts: [{ name: REPORT_FONT, data: await readFile(REPORT_FONT_URL) }],
     styles: {
       default: {
         document: {
-          run: { font: 'Arial', size: 21, color: COLORS.ink },
+          run: { font: REPORT_FONT, size: 21, color: COLORS.ink },
           paragraph: { spacing: { after: 120, line: 276 } },
         },
       },
@@ -397,7 +413,7 @@ export async function buildUserReportDocx({
           basedOn: 'Normal',
           next: 'Normal',
           quickFormat: true,
-          run: { font: 'Arial', size: 36, bold: true, color: '000000' },
+          run: { font: REPORT_FONT, size: 36, bold: true, color: '000000' },
           paragraph: { spacing: { before: 0, after: 80 }, alignment: AlignmentType.CENTER },
         },
         {
@@ -406,7 +422,7 @@ export async function buildUserReportDocx({
           basedOn: 'Normal',
           next: 'Normal',
           quickFormat: true,
-          run: { font: 'Arial', size: 28, bold: true, color: '000000' },
+          run: { font: REPORT_FONT, size: 28, bold: true, color: '000000' },
           paragraph: { spacing: { before: 300, after: 100 }, keepNext: true, outlineLevel: 0 },
         },
         {
@@ -414,7 +430,7 @@ export async function buildUserReportDocx({
           name: 'Report Signal Heading',
           basedOn: 'Normal',
           next: 'Normal',
-          run: { font: 'Arial', size: 21, bold: true, color: '000000' },
+          run: { font: REPORT_FONT, size: 21, bold: true, color: '000000' },
           paragraph: { spacing: { before: 80, after: 70 }, keepNext: true },
         },
         {
@@ -422,7 +438,7 @@ export async function buildUserReportDocx({
           name: 'Report Table Text',
           basedOn: 'Normal',
           next: 'Normal',
-          run: { font: 'Arial', size: 19, color: COLORS.ink },
+          run: { font: REPORT_FONT, size: 19, color: COLORS.ink },
           paragraph: { spacing: { before: 0, after: 0, line: 240 } },
         },
         {
@@ -430,7 +446,7 @@ export async function buildUserReportDocx({
           name: 'Report Note',
           basedOn: 'Normal',
           next: 'Normal',
-          run: { font: 'Arial', size: 18, color: COLORS.muted },
+          run: { font: REPORT_FONT, size: 18, color: COLORS.muted },
           paragraph: { spacing: { before: 260, after: 160, line: 252 } },
         },
       ],
@@ -450,7 +466,7 @@ export async function buildUserReportDocx({
                   indent: { left: 540, hanging: 270 },
                   spacing: { after: 100, line: 276 },
                 },
-                run: { font: 'Arial', size: 21, bold: true, color: '000000' },
+                run: { font: REPORT_FONT, size: 21, bold: true, color: '000000' },
               },
             },
           ],

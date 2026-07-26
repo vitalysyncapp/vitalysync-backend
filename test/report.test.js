@@ -51,7 +51,7 @@ function sampleMetrics() {
   });
 }
 
-test('report metrics use exact date windows and ignore missing metric values', () => {
+test('report metrics use exact windows, a 1-5 mood scale, and logged-day activity averages', () => {
   const metrics = sampleMetrics();
 
   assert.equal(metrics.wellness.week.count, 2);
@@ -59,11 +59,13 @@ test('report metrics use exact date windows and ignore missing metric values', (
   assert.equal(metrics.wellness.previousMonth.count, 2);
   assert.equal(metrics.wellness.year.count, 8);
   assert.equal(metrics.wellness.month.sleep, 7);
-  assert.equal(metrics.wellness.month.mood, 2);
+  assert.equal(metrics.wellness.month.mood, 3);
   assert.equal(metrics.wellness.month.stress, 4);
   assert.equal(metrics.activity.week.steps, 9000);
   assert.equal(metrics.activity.week.activeMinutes, 30);
+  assert.equal(metrics.activity.week.calories, 200);
   assert.equal(metrics.activity.month.steps, 6000);
+  assert.equal(metrics.activity.month.calories, 183);
 });
 
 test('report indicators consistently map values to semantic colors', () => {
@@ -75,6 +77,10 @@ test('report indicators consistently map values to semantic colors', () => {
   assert.equal(classifyReportMetric('sleep', 6.5).level, 'okay');
   assert.equal(classifyReportMetric('sleep', 5.5).level, 'warning');
   assert.equal(classifyReportMetric('sleep', 4.5).level, 'high');
+  assert.equal(classifyReportMetric('mood', 4).level, 'good');
+  assert.equal(classifyReportMetric('mood', 3).level, 'okay');
+  assert.equal(classifyReportMetric('mood', 2).level, 'warning');
+  assert.equal(classifyReportMetric('mood', 1).level, 'high');
   assert.equal(classifyReportMetric('stress', null).level, 'unknown');
   assert.equal(classifyReportMetric('coverage', null).label, 'No data');
   assert.equal(classifyReportMetric('coverage', 0.1).label, 'Very limited data');
@@ -96,6 +102,8 @@ test('report insights describe table values and keep recommendations last in the
   const zip = await JSZip.loadAsync(buffer);
   const documentXml = await zip.file('word/document.xml').async('string');
   const stylesXml = await zip.file('word/styles.xml').async('string');
+  const fontTableXml = await zip.file('word/fontTable.xml').async('string');
+  const embeddedFont = zip.file('word/fonts/font1.odttf');
 
   assert.match(documentXml, /w:pgMar[^>]*w:top="567"[^>]*w:right="567"[^>]*w:bottom="567"[^>]*w:left="567"/);
   assert.doesNotMatch(documentXml, /Explanation|Main Drivers/);
@@ -104,6 +112,9 @@ test('report insights describe table values and keep recommendations last in the
   assert.ok(documentXml.indexOf('Recommendations') > documentXml.indexOf('This report supports personal wellness tracking'));
   assert.match(documentXml, /The latest burnout result is 82\/100 with a critical status/);
   assert.match(documentXml, /AI-generated highlight/);
+  assert.match(documentXml, /Mood averaged 3\/5/);
+  assert.doesNotMatch(documentXml, /\/4/);
+  assert.match(documentXml, /Avg calories\/logged day/);
 
   for (const color of ['2E7D32', '1565C0', '9A6700', 'C62828', '6A1B9A']) {
     assert.match(documentXml, new RegExp(color));
@@ -112,5 +123,14 @@ test('report insights describe table values and keep recommendations last in the
   const firstHeaderRow = documentXml.match(/<w:tr[\s\S]*?<w:t[^>]*>Metric<\/w:t>[\s\S]*?<\/w:tr>/)?.[0];
   assert.ok(firstHeaderRow);
   assert.doesNotMatch(firstHeaderRow, /<w:shd/);
+  const activityWeekRow = documentXml
+    .match(/<w:tr[\s\S]*?<\/w:tr>/g)
+    ?.find((row) => row.includes('9000') && row.includes('30 min'));
+  assert.ok(activityWeekRow);
+  assert.doesNotMatch(activityWeekRow, /Good|Okay|Warning|High risk/);
   assert.match(stylesXml, /w:styleId="Heading1"[\s\S]*?w:color w:val="000000"/);
+  assert.match(stylesXml, /w:rFonts[^>]*w:ascii="Inter"[^>]*w:hAnsi="Inter"/);
+  assert.match(fontTableXml, /w:font w:name="Inter"[\s\S]*?w:embedRegular/);
+  assert.ok(embeddedFont);
+  assert.ok((await embeddedFont.async('nodebuffer')).length > 0);
 });
