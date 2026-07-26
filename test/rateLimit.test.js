@@ -26,6 +26,7 @@ function createTestConfig(overrides = {}) {
     'nutritionAnalysis',
     'aiNudge',
     'reportRefresh',
+    'reportExport',
   ];
 
   return Object.fromEntries(

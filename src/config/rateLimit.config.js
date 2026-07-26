@@ -57,4 +57,5 @@ export const rateLimitConfig = Object.freeze({
   ),
   aiNudge: createPolicy('RATE_LIMIT_AI_NUDGE_MAX', 20, 60),
   reportRefresh: createPolicy('RATE_LIMIT_REPORT_REFRESH_MAX', 10, 60),
+  reportExport: createPolicy('RATE_LIMIT_REPORT_EXPORT_MAX', 5, 24 * 60),
 });

@@ -166,6 +166,11 @@ export function createRateLimiters(config = rateLimitConfig) {
       policy: config.reportRefresh,
       keyGenerator: authenticatedUserKey,
     }),
+    reportExport: createLimiter({
+      identifier: 'report-export',
+      policy: config.reportExport,
+      keyGenerator: authenticatedUserKey,
+    }),
   });
 }
 
