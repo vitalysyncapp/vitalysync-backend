@@ -18,8 +18,11 @@ import {
 } from '../src/services/nutrition.service.js';
 import {
   buildDeterministicNutritionAssistantNudge,
+  buildNutritionAssistantNudgeCandidates,
   buildNutritionAssistantNudgeResponse,
+  getNutritionAssistantNudge,
 } from '../src/services/nutritionAssistantNudgeService.js';
+import { analyzeNutritionMealPatterns } from '../src/services/nutritionPatternService.js';
 import { createMockResponse } from './controllerTestHelpers.js';
 
 function summary({
@@ -43,6 +46,40 @@ function summary({
         items: [{ food_name: foodName }],
       },
     ],
+  };
+}
+
+function recentDay({
+  date,
+  calories = 500,
+  protein = 25,
+  carbs = 55,
+  fat = 18,
+  foodName = 'chicken rice tomato',
+  mealType = 'lunch',
+  createdAt = `${date}T12:00:00Z`,
+} = {}) {
+  return {
+    date,
+    day_totals: {
+      total_calories: calories,
+      total_protein_g: protein,
+      total_carbs_g: carbs,
+      total_fat_g: fat,
+    },
+    meals: [
+      {
+        meal_type: mealType,
+        created_at: createdAt,
+        items: [{ food_name: foodName }],
+      },
+    ],
+    logged: {
+      breakfast: mealType === 'breakfast',
+      lunch: mealType === 'lunch',
+      dinner: mealType === 'dinner',
+      snack: mealType === 'snack',
+    },
   };
 }
 
@@ -227,7 +264,61 @@ test('nutrition assistant nudge handles no meals logged', () => {
   });
 
   assert.equal(insight.metadata.macro_focus, 'complete_meal');
-  assert.ok(insight.message.includes('No meals are logged yet'));
+  assert.ok(insight.message.includes('No meals are logged today'));
+  assert.deepEqual(insight.metadata.recommended_foods, []);
+});
+
+test('nutrition assistant describes partial logs without treating them as a full day', () => {
+  const insight = buildDeterministicNutritionAssistantNudge({
+    summary: summary({ protein: 5, carbs: 45, fat: 15 }),
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+
+  assert.equal(insight.metadata.macro_focus, 'protein');
+  assert.match(insight.message, /today's logged meals/i);
+  assert.doesNotMatch(insight.message, /daily target|should have eaten/i);
+});
+
+test('nutrition meal patterns require repeated evidence from logged days', () => {
+  const analysis = analyzeNutritionMealPatterns([
+    recentDay({
+      date: '2026-05-19',
+      protein: 8,
+      foodName: 'rice tomato',
+    }),
+    recentDay({
+      date: '2026-05-20',
+      protein: 9,
+      foodName: 'rice tomato',
+    }),
+    recentDay({
+      date: '2026-05-21',
+      protein: 10,
+      foodName: 'rice tomato',
+    }),
+  ]);
+
+  const pattern = analysis.patterns.find(
+    (item) => item.type === 'repeated_low_protein'
+  );
+  assert.equal(pattern.occurrences, 3);
+  assert.equal(pattern.observed_days, 3);
+});
+
+test('nutrition assistant uses a repeated seven-day pattern when today is empty', () => {
+  const insight = buildDeterministicNutritionAssistantNudge({
+    summary: summary({ calories: 0, protein: 0, carbs: 0, fat: 0, meals: [] }),
+    recentSummaries: [
+      recentDay({ date: '2026-05-19', protein: 8, foodName: 'rice tomato' }),
+      recentDay({ date: '2026-05-20', protein: 9, foodName: 'rice tomato' }),
+      recentDay({ date: '2026-05-21', protein: 10, foodName: 'rice tomato' }),
+    ],
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+
+  assert.equal(insight.metadata.pattern_type, 'repeated_low_protein');
+  assert.equal(insight.metadata.pattern_occurrences, 3);
+  assert.match(insight.message, /3 recent logged days/i);
 });
 
 test('nutrition assistant nudge suppresses a recently dismissed macro focus', () => {
@@ -246,6 +337,91 @@ test('nutrition assistant nudge suppresses a recently dismissed macro focus', ()
   assert.notEqual(insight.metadata.macro_focus, 'protein');
 });
 
+test('nutrition assistant uses food-group and nudge-type feedback', () => {
+  const now = new Date('2026-05-22T12:00:00Z');
+  const input = summary({ protein: 28, carbs: 140, fat: 8 });
+  const dismissedFoodGroup = buildDeterministicNutritionAssistantNudge({
+    summary: input,
+    recentEvents: [
+      {
+        status: 'dismissed',
+        acted_at: new Date('2026-05-22T11:30:00Z'),
+        metadata: { food_group: 'protein_produce' },
+      },
+    ],
+    now,
+  });
+  const dismissedType = buildDeterministicNutritionAssistantNudge({
+    summary: input,
+    recentEvents: [
+      {
+        status: 'dismissed',
+        acted_at: new Date('2026-05-22T11:30:00Z'),
+        metadata: { nutrition_nudge_type: 'macro_balance' },
+      },
+    ],
+    now,
+  });
+
+  assert.notEqual(dismissedFoodGroup.metadata.food_group, 'protein_produce');
+  assert.notEqual(dismissedType.metadata.nutrition_nudge_type, 'macro_balance');
+});
+
+test('nutrition assistant slightly boosts an accepted focus', () => {
+  const insight = buildDeterministicNutritionAssistantNudge({
+    summary: summary({ protein: 5, carbs: 45, fat: 15 }),
+    recentEvents: [
+      {
+        status: 'accepted',
+        acted_at: new Date('2026-05-22T11:30:00Z'),
+        metadata: {
+          macro_focus: 'produce',
+          food_group: 'produce',
+          nutrition_nudge_type: 'food_group',
+        },
+      },
+    ],
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+
+  assert.equal(insight.metadata.macro_focus, 'produce');
+  assert.equal(insight.metadata.recently_accepted, true);
+});
+
+test('balanced logs produce positive reinforcement', () => {
+  const insight = buildDeterministicNutritionAssistantNudge({
+    summary: summary({
+      protein: 25,
+      carbs: 55,
+      fat: 18,
+      foodName: 'chicken rice tomato avocado',
+    }),
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+
+  assert.equal(insight.metadata.macro_focus, 'balanced_plate');
+  assert.match(insight.message, /balanced mix/i);
+});
+
+test('deterministic nutrition copy stays short and non-prescriptive', () => {
+  const candidates = buildNutritionAssistantNudgeCandidates({
+    summary: summary({ protein: 5, carbs: 140, fat: 2 }),
+    recentSummaries: [
+      recentDay({ date: '2026-05-20', protein: 7, foodName: 'rice' }),
+      recentDay({ date: '2026-05-21', protein: 8, foodName: 'rice' }),
+    ],
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+
+  for (const candidate of candidates) {
+    assert.ok(candidate.message.length <= 180);
+    assert.doesNotMatch(
+      `${candidate.title} ${candidate.message}`,
+      /calorie target|kcal|diet plan|weight loss|diagnos|treat|medical/i
+    );
+  }
+});
+
 test('nutrition assistant nudge falls back when AI enhancement fails', async () => {
   const insight = await buildNutritionAssistantNudgeResponse({
     summary: summary({ protein: 5, carbs: 45, fat: 15 }),
@@ -258,6 +434,50 @@ test('nutrition assistant nudge falls back when AI enhancement fails', async () 
 
   assert.equal(insight.metadata.macro_focus, 'protein');
   assert.equal(insight.metadata.ai_fallback, true);
+});
+
+test('nutrition assistant rejects AI changes to focus or foods', async () => {
+  const insight = await buildNutritionAssistantNudgeResponse({
+    summary: summary({ protein: 5, carbs: 45, fat: 15 }),
+    now: new Date('2026-05-22T12:00:00Z'),
+    useAi: true,
+    aiEnhancer: async (deterministic) => ({
+      ...deterministic,
+      message: 'Try salmon with your next meal.',
+      metadata: {
+        ...deterministic.metadata,
+        macro_focus: 'healthy_fats',
+        recommended_foods: ['salmon'],
+        ai_enhanced: true,
+      },
+    }),
+  });
+
+  assert.equal(insight.metadata.macro_focus, 'protein');
+  assert.equal(insight.metadata.ai_enhanced, false);
+  assert.equal(insight.metadata.ai_fallback, true);
+  assert.doesNotMatch(insight.message, /salmon/i);
+});
+
+test('nutrition assistant loads one bounded seven-day database window', async () => {
+  const queries = [];
+  const client = {
+    async query(text, values) {
+      queries.push({ text, values });
+      return { rows: [] };
+    },
+  };
+
+  const insight = await getNutritionAssistantNudge(client, 7, {
+    date: '2026-05-22',
+    useAi: false,
+  });
+
+  assert.equal(queries.length, 2);
+  assert.match(queries[0].text, /INTERVAL '6 days'/);
+  assert.deepEqual(queries[0].values, [7, '2026-05-22']);
+  assert.match(queries[1].text, /nudge_events/);
+  assert.equal(insight.metadata.macro_focus, 'complete_meal');
 });
 
 test('nutrition analysis validates required image input before database work', async () => {

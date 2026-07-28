@@ -1,9 +1,10 @@
 import OpenAI from 'openai';
 
 import { calculateTotals, toNumber } from './nutrition.service.js';
+import { analyzeNutritionMealPatterns } from './nutritionPatternService.js';
 
 const DEFAULT_OPENAI_NUTRITION_NUDGE_MODEL = 'gpt-4o-mini';
-const PROMPT_VERSION = 'nutrition_assistant_nudge_v1';
+const PROMPT_VERSION = 'nutrition_assistant_nudge_v2';
 const NUTRITION_FEEDBACK_COOLDOWN_HOURS = 48;
 
 const FOOD_GROUPS = {
@@ -16,12 +17,31 @@ const FOOD_GROUPS = {
 const NUTRITION_NUDGE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['title', 'message'],
+  required: ['title', 'message', 'macro_focus', 'recommended_foods'],
   properties: {
     title: { type: 'string' },
-    message: { type: 'string' }
+    message: { type: 'string' },
+    macro_focus: { type: 'string' },
+    recommended_foods: {
+      type: 'array',
+      items: { type: 'string' }
+    }
   }
 };
+
+const UNSAFE_NUTRITION_COPY_PATTERN =
+  /\b(calorie|kcal|diet|weight|goal|target|lose|treat|treatment|diagnos|disease|medical|prescri|cure|prevent|cholesterol|immunity|metabolism|blood sugar)\b/i;
+const FOOD_TERMS = [
+  ...new Set([
+    ...Object.values(FOOD_GROUPS).flat(),
+    'salmon',
+    'quinoa',
+    'beef',
+    'pork',
+    'milk',
+    'cheese'
+  ])
+];
 
 let openaiClient = null;
 
@@ -59,14 +79,6 @@ function truncate(value, maxLength) {
   }
 
   return `${normalized.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
-}
-
-function foodList(foods) {
-  if (foods.length <= 1) {
-    return foods.join('');
-  }
-
-  return `${foods.slice(0, -1).join(', ')}, or ${foods[foods.length - 1]}`;
 }
 
 function normalizeMetadata(value) {
@@ -143,6 +155,33 @@ function hasProduceSignal(summary) {
   return names.length > 0 && PRODUCE_PATTERN.test(names);
 }
 
+function candidateDimensions(macroFocus) {
+  switch (macroFocus) {
+    case 'complete_meal':
+      return { foodGroup: 'meal_log', nudgeType: 'meal_logging' };
+    case 'protein':
+      return { foodGroup: 'protein', nudgeType: 'macro_balance' };
+    case 'carbs_fiber':
+      return { foodGroup: 'fiber_rich_carbs', nudgeType: 'macro_balance' };
+    case 'healthy_fats':
+      return { foodGroup: 'healthy_fats', nudgeType: 'macro_balance' };
+    case 'protein_produce':
+      return { foodGroup: 'protein_produce', nudgeType: 'macro_balance' };
+    case 'fiber_produce':
+      return { foodGroup: 'fiber_produce', nudgeType: 'macro_balance' };
+    case 'produce':
+      return { foodGroup: 'produce', nudgeType: 'food_group' };
+    case 'breakfast_rhythm':
+    case 'meal_timing':
+      return { foodGroup: 'meal_rhythm', nudgeType: 'meal_timing' };
+    default:
+      return {
+        foodGroup: 'balanced_plate',
+        nudgeType: 'positive_reinforcement'
+      };
+  }
+}
+
 function createCandidate({
   dateKey,
   macroFocus,
@@ -154,6 +193,7 @@ function createCandidate({
   summary,
   metadata = {}
 }) {
+  const dimensions = candidateDimensions(macroFocus);
   return {
     id: `${dateKey}_nutrition_${macroFocus}`,
     title,
@@ -163,6 +203,8 @@ function createCandidate({
     generated_at: new Date().toISOString(),
     metadata: {
       macro_focus: macroFocus,
+      food_group: dimensions.foodGroup,
+      nutrition_nudge_type: dimensions.nudgeType,
       recommended_foods: recommendedFoods,
       ai_enhanced: false,
       deterministic_title: title,
@@ -177,8 +219,85 @@ function createCandidate({
   };
 }
 
+function buildPatternCandidates({ recentSummaries, dateKey, summary }) {
+  const analysis = analyzeNutritionMealPatterns(recentSummaries);
+
+  return analysis.patterns.map((pattern) => {
+    const sharedMetadata = {
+      pattern_type: pattern.type,
+      pattern_occurrences: pattern.occurrences,
+      pattern_observed_days: pattern.observed_days,
+      reason_basis: 'seven_day_logged_pattern'
+    };
+
+    switch (pattern.type) {
+      case 'repeated_low_protein':
+        return createCandidate({
+          dateKey,
+          macroFocus: 'protein',
+          title: 'Add a protein food',
+          message: `Protein was light in ${pattern.occurrences} recent logged days. Add a protein food you enjoy to your next meal.`,
+          recommendedFoods: FOOD_GROUPS.protein,
+          score: 0.12 + pattern.occurrences * 0.02,
+          confidence: pattern.occurrences >= 4 ? 'high' : 'medium',
+          summary,
+          metadata: sharedMetadata
+        });
+      case 'repeated_missing_produce':
+        return createCandidate({
+          dateKey,
+          macroFocus: 'produce',
+          title: 'Add fruit or vegetables',
+          message: `Produce was missing from ${pattern.occurrences} recent logged days. Add a fruit or vegetable you enjoy to your next meal.`,
+          recommendedFoods: FOOD_GROUPS.produce,
+          score: 0.1 + pattern.occurrences * 0.015,
+          confidence: pattern.occurrences >= 4 ? 'high' : 'medium',
+          summary,
+          metadata: sharedMetadata
+        });
+      case 'repeated_missing_breakfast':
+        return createCandidate({
+          dateKey,
+          macroFocus: 'breakfast_rhythm',
+          title: 'Check your morning rhythm',
+          message: `Breakfast was not logged on ${pattern.occurrences} recent logged days. If it fits your routine, try a simple morning meal.`,
+          recommendedFoods: [],
+          score: 0.09 + pattern.occurrences * 0.015,
+          confidence: pattern.occurrences >= 4 ? 'high' : 'medium',
+          summary,
+          metadata: sharedMetadata
+        });
+      case 'repeated_high_carb_share':
+        return createCandidate({
+          dateKey,
+          macroFocus: 'protein_produce',
+          title: 'Pair carbs with balance',
+          message: `Carbs made up most of ${pattern.occurrences} recent logged days. Pair your next carb food with protein or produce.`,
+          recommendedFoods: [...FOOD_GROUPS.protein, ...FOOD_GROUPS.produce],
+          score: 0.11 + pattern.occurrences * 0.02,
+          confidence: pattern.occurrences >= 4 ? 'high' : 'medium',
+          summary,
+          metadata: sharedMetadata
+        });
+      default:
+        return createCandidate({
+          dateKey,
+          macroFocus: 'meal_timing',
+          title: 'Try a steadier meal rhythm',
+          message: `Long gaps appeared between logged meals on ${pattern.occurrences} recent days. Try a meal rhythm that feels practical for you.`,
+          recommendedFoods: [],
+          score: 0.08 + pattern.occurrences * 0.015,
+          confidence: pattern.occurrences >= 4 ? 'high' : 'medium',
+          summary,
+          metadata: sharedMetadata
+        });
+    }
+  });
+}
+
 export function buildNutritionAssistantNudgeCandidates({
   summary,
+  recentSummaries = [],
   now = new Date()
 }) {
   const normalized = normalizeSummary(summary);
@@ -187,23 +306,27 @@ export function buildNutritionAssistantNudgeCandidates({
   const candidates = [];
 
   if (normalized.meals.length === 0 || normalized.total_calories < 50) {
+    const hasMealLog = normalized.meals.length > 0;
     return [
+      ...buildPatternCandidates({
+        recentSummaries,
+        dateKey,
+        summary: normalized
+      }),
       createCandidate({
         dateKey,
         macroFocus: 'complete_meal',
-        title: 'Build a simple plate',
-        message:
-          `No meals are logged yet. For your next meal, aim for protein, a fiber-rich carb, and produce, such as eggs with rice and ${FOOD_GROUPS.produce[0]}.`,
-        recommendedFoods: [
-          'eggs',
-          'rice',
-          'leafy vegetables',
-          'fruit'
-        ],
-        score: 1,
+        title: hasMealLog ? 'Add meal details' : 'Log your next meal',
+        message: hasMealLog
+          ? 'Today\'s meal log has limited detail. Add the foods you had so suggestions can use the log accurately.'
+          : 'No meals are logged today. Log your next meal so suggestions can reflect what you actually ate.',
+        recommendedFoods: [],
+        score: 0.08,
         confidence: 'low',
         summary: normalized,
-        metadata: { meal_signal: 'no_meals_logged' }
+        metadata: {
+          meal_signal: hasMealLog ? 'limited_meal_detail' : 'no_meals_logged'
+        }
       })
     ];
   }
@@ -216,7 +339,7 @@ export function buildNutritionAssistantNudgeCandidates({
         macroFocus: 'protein',
         title: 'Add protein next',
         message:
-          `Protein looks light compared with the rest of today's macros. At your next meal, add ${foodList(FOOD_GROUPS.protein)} to make the plate steadier.`,
+          'Protein looks light in today\'s logged meals. Add a protein food you enjoy to your next meal.',
         recommendedFoods: FOOD_GROUPS.protein,
         score,
         confidence: score >= 0.12 ? 'high' : 'medium',
@@ -234,7 +357,7 @@ export function buildNutritionAssistantNudgeCandidates({
         macroFocus: 'carbs_fiber',
         title: 'Add fiber-rich carbs',
         message:
-          `Carbs are low in today's balance. A simple option like ${foodList(FOOD_GROUPS.carbs_fiber)} can add steady energy without making the meal complicated.`,
+          'Fiber-rich carbs look light in today\'s logs. Add a grain, starchy vegetable, or fruit you enjoy.',
         recommendedFoods: FOOD_GROUPS.carbs_fiber,
         score,
         confidence: score >= 0.12 ? 'high' : 'medium',
@@ -252,7 +375,7 @@ export function buildNutritionAssistantNudgeCandidates({
         macroFocus: 'healthy_fats',
         title: 'Add healthy fats',
         message:
-          `Fat is low in today's macro mix. Add a small serving of ${foodList(FOOD_GROUPS.healthy_fats)} with your next meal to round it out.`,
+          'Healthy fats look light in today\'s logs. Add a small portion of nuts, avocado, or olive oil.',
         recommendedFoods: FOOD_GROUPS.healthy_fats,
         score,
         confidence: score >= 0.10 ? 'high' : 'medium',
@@ -275,7 +398,7 @@ export function buildNutritionAssistantNudgeCandidates({
         macroFocus: 'protein_produce',
         title: 'Balance carbs with protein',
         message:
-          `Carbs are carrying most of today's macros. Balance the next meal with protein and produce, such as eggs, tofu, chicken, leafy vegetables, tomatoes, or fruit.`,
+          'Carbs make up most of today\'s logged balance. Pair the next carb food with protein or produce.',
         recommendedFoods: foods,
         score: shares.carbs - 0.50,
         confidence: shares.carbs >= 0.68 ? 'high' : 'medium',
@@ -296,9 +419,9 @@ export function buildNutritionAssistantNudgeCandidates({
       createCandidate({
         dateKey,
         macroFocus: 'fiber_produce',
-        title: 'Lighten the next plate',
+        title: 'Add fiber and produce',
         message:
-          `Fat is taking a large share today. Balance the next meal with fiber-rich carbs and produce like oats, sweet potato, rice, leafy vegetables, tomatoes, or fruit.`,
+          'Fats make up most of today\'s logged balance. Add a fiber-rich carb or produce to the next plate.',
         recommendedFoods: foods,
         score: shares.fat - 0.34,
         confidence: shares.fat >= 0.52 ? 'high' : 'medium',
@@ -315,7 +438,7 @@ export function buildNutritionAssistantNudgeCandidates({
         macroFocus: 'produce',
         title: 'Add produce',
         message:
-          `Produce is missing from today's logged foods. Add ${foodList(FOOD_GROUPS.produce)} to bring in fiber, color, and a steadier plate.`,
+          'Produce is missing from today\'s logged foods. Add a fruit or vegetable you enjoy to your next meal.',
         recommendedFoods: FOOD_GROUPS.produce,
         score: 0.09,
         confidence: 'low',
@@ -331,7 +454,7 @@ export function buildNutritionAssistantNudgeCandidates({
       macroFocus: 'balanced_plate',
       title: 'Keep the plate balanced',
       message:
-        'Your macros look reasonably balanced today. Keep the next meal simple with protein, fiber-rich carbs, healthy fats, and produce.',
+        'Today\'s logged meals show a balanced mix. Keep choosing the foods that worked well for you.',
       recommendedFoods: [
         'eggs',
         'rice',
@@ -344,58 +467,90 @@ export function buildNutritionAssistantNudgeCandidates({
     })
   );
 
+  candidates.push(
+    ...buildPatternCandidates({
+      recentSummaries,
+      dateKey,
+      summary: normalized
+    })
+  );
+
   return candidates;
 }
 
-function feedbackForFocus(recentEvents, macroFocus, now) {
-  const relevant = recentEvents.filter((event) => {
-    const metadata = normalizeMetadata(event.metadata);
-    return metadata.macro_focus === macroFocus;
-  });
+function feedbackForCandidate(recentEvents, candidate, now) {
+  const dimensions = [
+    ['macro_focus', candidate.metadata.macro_focus],
+    ['food_group', candidate.metadata.food_group],
+    ['nutrition_nudge_type', candidate.metadata.nutrition_nudge_type]
+  ];
+  const relevant = recentEvents
+    .map((event) => {
+      const metadata = normalizeMetadata(event.metadata);
+      const matchedDimensions = dimensions
+        .filter(([key, value]) => value && metadata[key] === value)
+        .map(([key]) => key);
+      return { event, matchedDimensions };
+    })
+    .filter((item) => item.matchedDimensions.length > 0);
 
-  const dismissedRecently = relevant.some((event) =>
-    event.status === 'dismissed' &&
-    hoursSince(event.created_at ?? event.acted_at, now) <= NUTRITION_FEEDBACK_COOLDOWN_HOURS
+  const dismissed = relevant.filter(
+    ({ event }) =>
+      event.status === 'dismissed' &&
+      hoursSince(event.acted_at ?? event.created_at, now) <=
+        NUTRITION_FEEDBACK_COOLDOWN_HOURS
   );
-  const acceptedRecently = relevant.some((event) =>
-    ['accepted', 'completed'].includes(event.status) &&
-    hoursSince(event.created_at ?? event.acted_at, now) <= 14 * 24
+  const accepted = relevant.filter(
+    ({ event }) =>
+      ['accepted', 'completed'].includes(event.status) &&
+      hoursSince(event.acted_at ?? event.created_at, now) <= 14 * 24
   );
 
   return {
-    dismissedRecently,
-    acceptedRecently
+    dismissedRecently: dismissed.length > 0,
+    acceptedRecently: accepted.length > 0,
+    dismissedDimensions: [
+      ...new Set(dismissed.flatMap((item) => item.matchedDimensions))
+    ],
+    acceptedDimensions: [
+      ...new Set(accepted.flatMap((item) => item.matchedDimensions))
+    ]
   };
 }
 
 export function buildDeterministicNutritionAssistantNudge({
   summary,
+  recentSummaries = [],
   recentEvents = [],
   now = new Date()
 }) {
-  const candidates = buildNutritionAssistantNudgeCandidates({ summary, now })
+  const candidates = buildNutritionAssistantNudgeCandidates({
+    summary,
+    recentSummaries,
+    now
+  })
     .map((candidate) => {
-      const feedback = feedbackForFocus(
-        recentEvents,
-        candidate.metadata.macro_focus,
-        now
-      );
+      const feedback = feedbackForCandidate(recentEvents, candidate, now);
       return {
         ...candidate,
         metadata: {
           ...candidate.metadata,
-          recently_dismissed_macro_focus: feedback.dismissedRecently,
-          recently_accepted_macro_focus: feedback.acceptedRecently
+          recently_dismissed: feedback.dismissedRecently,
+          recently_accepted: feedback.acceptedRecently,
+          dismissed_feedback_dimensions: feedback.dismissedDimensions,
+          accepted_feedback_dimensions: feedback.acceptedDimensions
         }
       };
     });
 
   const visible = candidates.filter(
-    (candidate) => candidate.metadata.recently_dismissed_macro_focus !== true
+    (candidate) => candidate.metadata.recently_dismissed !== true
   );
-  const ranked = (visible.length > 0 ? visible : candidates).sort((left, right) => {
-    const leftAccepted = left.metadata.recently_accepted_macro_focus === true ? 0.02 : 0;
-    const rightAccepted = right.metadata.recently_accepted_macro_focus === true ? 0.02 : 0;
+  const ranked = visible.sort((left, right) => {
+    const leftAccepted =
+      0.02 * (left.metadata.accepted_feedback_dimensions?.length ?? 0);
+    const rightAccepted =
+      0.02 * (right.metadata.accepted_feedback_dimensions?.length ?? 0);
     return (
       (right.metadata.selection_score + rightAccepted) -
       (left.metadata.selection_score + leftAccepted)
@@ -417,12 +572,91 @@ function parseJsonResponse(response) {
 function normalizeAiOutput(payload) {
   const title = truncate(payload?.title, 48);
   const message = truncate(payload?.message, 220);
+  const macroFocus = safeString(payload?.macro_focus);
+  const recommendedFoods = Array.isArray(payload?.recommended_foods)
+    ? payload.recommended_foods.map((food) => safeString(food)).filter(Boolean)
+    : [];
 
-  if (!title || !message) {
+  if (!title || !message || !macroFocus) {
     return null;
   }
 
-  return { title, message };
+  return { title, message, macroFocus, recommendedFoods };
+}
+
+function normalizedList(values) {
+  return values.map((value) => safeString(value).toLowerCase()).sort();
+}
+
+function sameList(left, right) {
+  return (
+    JSON.stringify(normalizedList(left)) ===
+    JSON.stringify(normalizedList(right))
+  );
+}
+
+function mentionsUnapprovedFood(
+  message,
+  recommendedFoods,
+  deterministicMessage
+) {
+  const normalizedMessage = message.toLowerCase();
+  const allowedText =
+    `${recommendedFoods.join(' ')} ${deterministicMessage}`.toLowerCase();
+
+  return FOOD_TERMS.some((food) => {
+    const normalizedFood = food.toLowerCase();
+    return (
+      normalizedMessage.includes(normalizedFood) &&
+      !allowedText.includes(normalizedFood)
+    );
+  });
+}
+
+function safeEnhancedNudge(deterministic, enhanced) {
+  if (!enhanced || typeof enhanced !== 'object') {
+    return null;
+  }
+
+  const title = truncate(enhanced.title, 48);
+  const message = truncate(enhanced.message, 220);
+  const enhancedMetadata = normalizeMetadata(enhanced.metadata);
+  const macroFocus = safeString(
+    enhanced.macro_focus ?? enhancedMetadata.macro_focus,
+    deterministic.metadata.macro_focus
+  );
+  const recommendedFoods =
+    enhanced.recommended_foods ?? enhancedMetadata.recommended_foods;
+  const deterministicFoods = deterministic.metadata.recommended_foods ?? [];
+
+  if (
+    !title ||
+    !message ||
+    macroFocus !== deterministic.metadata.macro_focus ||
+    (recommendedFoods != null &&
+      (!Array.isArray(recommendedFoods) ||
+        !sameList(recommendedFoods, deterministicFoods))) ||
+    UNSAFE_NUTRITION_COPY_PATTERN.test(`${title} ${message}`) ||
+    mentionsUnapprovedFood(message, deterministicFoods, deterministic.message)
+  ) {
+    return null;
+  }
+
+  return {
+    ...deterministic,
+    title,
+    message,
+    metadata: {
+      ...deterministic.metadata,
+      ai_enhanced: enhancedMetadata.ai_enhanced === true,
+      ...(enhancedMetadata.ai_model
+        ? { ai_model: enhancedMetadata.ai_model }
+        : {}),
+      ...(enhancedMetadata.ai_prompt_version
+        ? { ai_prompt_version: enhancedMetadata.ai_prompt_version }
+        : {})
+    }
+  };
 }
 
 export async function enhanceNutritionAssistantNudge(insight, { summary }) {
@@ -442,7 +676,7 @@ export async function enhanceNutritionAssistantNudge(insight, { summary }) {
           {
             type: 'input_text',
             text:
-              'You write short nutrition nudges for VitalySync. Keep advice general, practical, and non-medical. Do not prescribe calories, dieting rules, weight loss, or diagnosis. Preserve the macro focus and recommended foods. Use plain English and one actionable sentence.'
+              'You polish short nutrition nudges for VitalySync. Keep advice general, practical, and non-medical. Do not prescribe calories, dieting rules, weight loss, or diagnosis. Return the exact macro_focus and recommended_foods values supplied. Do not add foods, meals, goals, or health claims. Use plain English.'
           }
         ]
       },
@@ -480,6 +714,13 @@ export async function enhanceNutritionAssistantNudge(insight, { summary }) {
     return insight;
   }
 
+  if (
+    normalized.macroFocus !== macroFocus ||
+    !sameList(normalized.recommendedFoods, recommendedFoods)
+  ) {
+    throw new Error('AI nutrition nudge changed the deterministic decision');
+  }
+
   return {
     ...insight,
     title: normalized.title,
@@ -497,6 +738,7 @@ export async function enhanceNutritionAssistantNudge(insight, { summary }) {
 
 export async function buildNutritionAssistantNudgeResponse({
   summary,
+  recentSummaries = [],
   recentEvents = [],
   now = new Date(),
   useAi = true,
@@ -504,6 +746,7 @@ export async function buildNutritionAssistantNudgeResponse({
 }) {
   const deterministic = buildDeterministicNutritionAssistantNudge({
     summary,
+    recentSummaries,
     recentEvents,
     now
   });
@@ -513,7 +756,13 @@ export async function buildNutritionAssistantNudgeResponse({
   }
 
   try {
-    return await aiEnhancer(deterministic, { summary });
+    const enhanced = await aiEnhancer(deterministic, { summary });
+    const safe = safeEnhancedNudge(deterministic, enhanced);
+    if (safe) {
+      return safe;
+    }
+
+    throw new Error('AI nutrition nudge failed deterministic validation');
   } catch (error) {
     return {
       ...deterministic,
@@ -527,7 +776,16 @@ export async function buildNutritionAssistantNudgeResponse({
   }
 }
 
-async function loadDailyNutritionSummary(client, userId, date) {
+function recentDateKeys(endDate, count = 7) {
+  const end = new Date(`${endDate}T12:00:00.000Z`);
+  return Array.from({ length: count }, (_, index) => {
+    const date = new Date(end);
+    date.setUTCDate(end.getUTCDate() - (count - index - 1));
+    return safeDateKey(date);
+  });
+}
+
+async function loadNutritionWindow(client, userId, date) {
   const logsResult = await client.query(
     `SELECT
        nutrition_log_id,
@@ -542,8 +800,9 @@ async function loadDailyNutritionSummary(client, userId, date) {
        created_at,
        updated_at
      FROM nutrition_logs
-     WHERE user_id = $1 AND log_date = $2
-     ORDER BY CASE meal_type
+     WHERE user_id = $1
+       AND log_date BETWEEN ($2::date - INTERVAL '6 days') AND $2::date
+     ORDER BY log_date ASC, CASE meal_type
        WHEN 'breakfast' THEN 1
        WHEN 'lunch' THEN 2
        WHEN 'dinner' THEN 3
@@ -570,31 +829,40 @@ async function loadDailyNutritionSummary(client, userId, date) {
     }, {});
   }
 
-  const meals = logsResult.rows.map((log) => ({
-    ...log,
-    items: itemsByLogId[log.nutrition_log_id] ?? []
-  }));
-  const dayTotals = calculateTotals(
-    meals.map((meal) => ({
-      calories: meal.total_calories,
-      protein_g: meal.total_protein_g,
-      carbs_g: meal.total_carbs_g,
-      fat_g: meal.total_fat_g
-    }))
-  );
-  const loggedMealTypes = new Set(meals.map((meal) => meal.meal_type));
+  const mealsByDate = logsResult.rows.reduce((grouped, log) => {
+    const dateKey = safeDateKey(log.log_date);
+    grouped[dateKey] = grouped[dateKey] ?? [];
+    grouped[dateKey].push({
+      ...log,
+      items: itemsByLogId[log.nutrition_log_id] ?? []
+    });
+    return grouped;
+  }, {});
 
-  return {
-    date,
-    meals,
-    day_totals: dayTotals,
-    logged: {
-      breakfast: loggedMealTypes.has('breakfast'),
-      lunch: loggedMealTypes.has('lunch'),
-      dinner: loggedMealTypes.has('dinner'),
-      snack: loggedMealTypes.has('snack')
-    }
-  };
+  return recentDateKeys(date).map((dateKey) => {
+    const meals = mealsByDate[dateKey] ?? [];
+    const dayTotals = calculateTotals(
+      meals.map((meal) => ({
+        calories: meal.total_calories,
+        protein_g: meal.total_protein_g,
+        carbs_g: meal.total_carbs_g,
+        fat_g: meal.total_fat_g
+      }))
+    );
+    const loggedMealTypes = new Set(meals.map((meal) => meal.meal_type));
+
+    return {
+      date: dateKey,
+      meals,
+      day_totals: dayTotals,
+      logged: {
+        breakfast: loggedMealTypes.has('breakfast'),
+        lunch: loggedMealTypes.has('lunch'),
+        dinner: loggedMealTypes.has('dinner'),
+        snack: loggedMealTypes.has('snack')
+      }
+    };
+  });
 }
 
 async function loadRecentNutritionFeedback(client, userId) {
@@ -616,11 +884,13 @@ export async function getNutritionAssistantNudge(
   userId,
   { date = safeDateKey(), useAi = true } = {}
 ) {
-  const summary = await loadDailyNutritionSummary(client, userId, date);
+  const recentSummaries = await loadNutritionWindow(client, userId, date);
+  const summary = recentSummaries[recentSummaries.length - 1];
   const recentEvents = await loadRecentNutritionFeedback(client, userId);
 
   return buildNutritionAssistantNudgeResponse({
     summary,
+    recentSummaries,
     recentEvents,
     now: new Date(`${date}T12:00:00.000Z`),
     useAi

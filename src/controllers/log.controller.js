@@ -168,6 +168,17 @@ function formatStreakPayload(streakRow) {
   return formatStreakPayloadForClient(streakRow);
 }
 
+function baselineRefreshConflict(res, status) {
+  return res.status(409).json({
+    message: 'A fresh burnout baseline is needed before this check-in',
+    code: 'BASELINE_REFRESH_REQUIRED',
+    requires_baseline_refresh: true,
+    baseline_refresh_reason: status.baseline_refresh_reason,
+    last_logged_date: status.last_logged_date,
+    days_since_last_log: status.days_since_last_log
+  });
+}
+
 export async function getTodayLog(req, res) {
   const userId = getAuthenticatedUserId(req) ?? Number(req.query.user_id);
   const logDate = String(req.query.log_date ?? '').trim();
@@ -513,6 +524,16 @@ export async function saveDailyLog(req, res) {
     if (userResult.rowCount === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ message: 'User not found' });
+    }
+
+    const checkInStatus = await getCheckInScheduleStatus(client, {
+      userId,
+      localDate: String(logDate),
+      forUpdate: true
+    });
+    if (checkInStatus?.requires_baseline_refresh) {
+      await client.query('ROLLBACK');
+      return baselineRefreshConflict(res, checkInStatus);
     }
 
     const streakRow = await ensureUserStreak(client, userId);
@@ -863,6 +884,10 @@ export async function saveWeeklyPulse(req, res) {
       localDate: normalizedResponseDate,
       forUpdate: true
     });
+    if (schedule?.requires_baseline_refresh) {
+      await client.query('ROLLBACK');
+      return baselineRefreshConflict(res, schedule);
+    }
     const dueDate = schedule?.requiredMode === 'weekly'
       ? schedule.dueDate
       : weekStartDate;

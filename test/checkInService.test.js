@@ -22,10 +22,18 @@ function dailyPayload(checkInType = 'daily') {
 }
 
 class CheckInClient {
-  constructor({ schedule, todayPulse = null, hasTodayLog = true }) {
+  constructor({
+    schedule,
+    todayPulse = null,
+    hasTodayLog = true,
+    lastLoggedDate = null,
+    baselineEpochStartedAt = null
+  }) {
     this.schedule = { ...schedule };
     this.todayPulse = todayPulse;
     this.hasTodayLog = hasTodayLog;
+    this.lastLoggedDate = lastLoggedDate;
+    this.baselineEpochStartedAt = baselineEpochStartedAt;
     this.updatedDaily = false;
     this.savedWeekly = null;
     this.commands = [];
@@ -42,7 +50,12 @@ class CheckInClient {
     if (normalized.includes('FROM users LEFT JOIN user_reminder_preferences')) {
       return {
         rowCount: 1,
-        rows: [{ user_id: 1, pulse_weekday: 1 }]
+        rows: [{
+          user_id: 1,
+          pulse_weekday: 1,
+          last_logged_date: this.lastLoggedDate,
+          baseline_epoch_started_at: this.baselineEpochStartedAt
+        }]
       };
     }
     if (normalized.startsWith('INSERT INTO user_check_in_schedules')) {
@@ -252,4 +265,37 @@ test('weekly redo saves the five pulse answers and daily log atomically', async 
     true
   );
   assert.equal(client.commands.includes('COMMIT'), true);
+});
+
+test('thirty-day return blocks a unified save with the stable conflict code', async () => {
+  const client = new CheckInClient({
+    schedule: {
+      pulse_weekday: 1,
+      next_pulse_due_date: '2026-06-01',
+      last_completed_due_date: null,
+      last_completed_at: null
+    },
+    lastLoggedDate: '2026-04-26',
+    baselineEpochStartedAt: '2026-04-01'
+  });
+
+  await assert.rejects(
+    submitCheckIn({
+      userId: 1,
+      payload: dailyPayload(),
+      database: databaseFor(client),
+      scoreUpdater: async () => null
+    }),
+    (error) => {
+      assert.equal(error.statusCode, 409);
+      assert.equal(error.code, 'BASELINE_REFRESH_REQUIRED');
+      assert.equal(error.details.requires_baseline_refresh, true);
+      assert.equal(error.details.baseline_refresh_reason, 'thirty_day_return');
+      assert.equal(error.details.days_since_last_log, 30);
+      return true;
+    }
+  );
+
+  assert.equal(client.updatedDaily, false);
+  assert.equal(client.commands.includes('ROLLBACK'), true);
 });

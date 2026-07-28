@@ -4,6 +4,7 @@ import {
   calculateNextPulseDueDate,
   calculateUpcomingPulseDate
 } from './checkInCadence.js';
+import { detectReturnState } from './burnoutEvidencePolicy.js';
 
 function formatDateOnly(value) {
   if (!value) return null;
@@ -17,9 +18,21 @@ function compareDates(left, right) {
 
 async function readUserContext(client, userId) {
   const result = await client.query(
-    `SELECT
+     `SELECT
        users.user_id,
-       COALESCE(preferences.weekly_pulse_reminder_day, 1) AS pulse_weekday
+       COALESCE(preferences.weekly_pulse_reminder_day, 1) AS pulse_weekday,
+       (
+         SELECT MAX(log_date)
+         FROM daily_logs
+         WHERE daily_logs.user_id = users.user_id
+       ) AS last_logged_date,
+       (
+         SELECT started_at
+         FROM user_baseline_epochs epoch
+         WHERE epoch.user_id = users.user_id AND epoch.ended_at IS NULL
+         ORDER BY epoch.started_at DESC, epoch.baseline_epoch_id DESC
+         LIMIT 1
+       ) AS baseline_epoch_started_at
      FROM users
      LEFT JOIN user_reminder_preferences preferences
        ON preferences.user_id = users.user_id
@@ -184,6 +197,11 @@ export async function getCheckInScheduleStatus(
   const requiredMode = completedToday || isDue || isOverdue
     ? 'weekly'
     : 'daily';
+  const returnState = detectReturnState({
+    lastLoggedDate: user.last_logged_date,
+    localDate,
+    baselineEpochStartedAt: user.baseline_epoch_started_at
+  });
 
   return {
     requiredMode,
@@ -197,7 +215,8 @@ export async function getCheckInScheduleStatus(
     lastCompletedDueDate: formatDateOnly(schedule.last_completed_due_date),
     lastCompletedAt: schedule.last_completed_at ?? null,
     pulseWeekday,
-    todayPulse
+    todayPulse,
+    ...returnState
   };
 }
 

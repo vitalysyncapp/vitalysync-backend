@@ -1,5 +1,10 @@
 import { enhanceNudgeRecommendations } from './aiNudgeService.js';
 import { getBurnoutPatternSummary } from './burnoutPatternService.js';
+import { validateNudgeCopy } from './nudgeCopyPolicy.js';
+import {
+  fallbackCopyForSeverity,
+  toUserFacingNudgeSeverity
+} from './nudgeSeverityPolicy.js';
 
 const PRIORITY_RANK = {
   urgent: 4,
@@ -133,6 +138,24 @@ function normalizeConfidence(summary) {
   return Number.isFinite(confidence) ? Math.round(confidence) : 0;
 }
 
+function dominantDimensionFromSummary(summary) {
+  const dimension = summary?.windows?.['14_day']?.dominant_dimension ??
+    summary?.windows?.['7_day']?.dominant_dimension ??
+    null;
+  if (!dimension) {
+    return null;
+  }
+
+  return compactObject({
+    key: safeText(dimension.key),
+    label: safeText(dimension.label),
+    focus: safeText(dimension.focus),
+    average_score: Number.isFinite(Number(dimension.average_score))
+      ? Number(dimension.average_score)
+      : null
+  });
+}
+
 function buildRecommendation({
   nudgeType,
   priority,
@@ -143,9 +166,17 @@ function buildRecommendation({
   recommendedFocus,
   pattern,
   summary,
+  internalSeverity = null,
   metadata = {}
 }) {
   const weeklyContext = summary?.latest_score?.source_snapshot?.weekly_pulse;
+  const resolvedInternalSeverity = internalSeverity ?? pattern?.severity ?? null;
+  const userFacingSeverity = toUserFacingNudgeSeverity(
+    resolvedInternalSeverity,
+    priority
+  );
+  const dominantDimension = dominantDimensionFromSummary(summary);
+  const latestPattern = summary?.patterns?.[0] ?? pattern ?? null;
   return {
     nudge_type: nudgeType,
     priority,
@@ -155,14 +186,23 @@ function buildRecommendation({
     trigger_reason: triggerReason,
     recommended_focus: recommendedFocus,
     pattern_type: pattern?.type ?? null,
-    severity: pattern?.severity ?? null,
+    severity: userFacingSeverity,
     confidence_score: normalizeConfidence(summary),
     nudge_event_id: null,
     metadata: {
       pattern_type: pattern?.type ?? null,
       pattern_title: pattern?.title ?? null,
+      internal_severity: resolvedInternalSeverity,
+      user_facing_severity: userFacingSeverity,
       adaptive_state: summary?.adaptive_state?.state ?? null,
       latest_risk_level: summary?.latest_score?.risk_level ?? null,
+      dominant_dimension: dominantDimension,
+      context_snapshot: compactObject({
+        latest_pattern_type: latestPattern?.type ?? null,
+        latest_pattern_severity: latestPattern?.severity ?? null,
+        dominant_dimension: dominantDimension,
+        confidence_score: normalizeConfidence(summary)
+      }),
       weekly_context_response_date: weeklyContext?.response_date ?? null,
       weekly_context_freshness: weeklyContext?.freshness ?? 'not_available',
       recommended_focus: recommendedFocus,
@@ -171,179 +211,269 @@ function buildRecommendation({
   };
 }
 
-function recommendationFromPattern(pattern, summary) {
+function higherSeverityCopy(pattern) {
+  const severity = toUserFacingNudgeSeverity(pattern?.severity);
+  if (severity === 'needs support') {
+    return fallbackCopyForSeverity(severity);
+  }
+  if (severity !== 'high') {
+    return null;
+  }
+
+  switch (pattern?.recommended_focus) {
+    case 'recovery':
+      return {
+        title: 'Protect recovery today',
+        message:
+          'Recovery is the clearest signal. Protect one real break before your next hard task.',
+        actionLabel: 'Protect a break'
+      };
+    case 'workload':
+      return {
+        title: 'Make workload lighter',
+        message:
+          'Workload is the clearest signal. Make one task smaller today.',
+        actionLabel: 'Reduce one task'
+      };
+    case 'progress':
+      return {
+        title: 'Shrink the next step',
+        message:
+          'Progress strain is staying high. Cut one task down to its next manageable step.',
+        actionLabel: 'Shrink one task'
+      };
+    default:
+      return fallbackCopyForSeverity(severity);
+  }
+}
+
+export function recommendationFromPattern(pattern, summary) {
   const priority = priorityForPattern(pattern);
+  const severityCopy = higherSeverityCopy(pattern);
+  const copy = (fallback) => severityCopy ?? fallback;
 
   switch (pattern.type) {
-    case 'sustained_elevated_risk':
+    case 'sustained_elevated_risk': {
+      const selected = copy({
+        title: 'Ease the recent load',
+        message:
+          'Pressure has stayed elevated. Make one task smaller today.',
+        actionLabel: 'Reduce one task'
+      });
       return buildRecommendation({
         nudgeType: 'load_reduction_check',
         priority,
-        title: 'Protect your recovery window',
-        message:
-          'Your recent pattern has stayed high. Make one task smaller today and protect a real break.',
-        actionLabel: 'Plan recovery',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: 'load_reduction',
         pattern,
         summary
       });
-    case 'rising_recent_risk':
+    }
+    case 'rising_recent_risk': {
+      const selected = copy({
+        title: 'Take a small reset',
+        message:
+          'Pressure is trending up. Take one short reset before the next task.',
+        actionLabel: 'Take a reset'
+      });
       return buildRecommendation({
         nudgeType: 'micro_recovery_break',
         priority,
-        title: 'Slow the rising trend',
-        message:
-          'Your risk trend is climbing. Take a short pause now and make the next task lighter.',
-        actionLabel: 'Take a pause',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: 'early_recovery',
         pattern,
         summary
       });
-    case 'workload_recovery_mismatch':
+    }
+    case 'workload_recovery_mismatch': {
+      const selected = copy({
+        title: 'Protect a recovery break',
+        message:
+          'Workload is outpacing recovery. Protect one break before the next hard task.',
+        actionLabel: 'Protect a break'
+      });
       return buildRecommendation({
         nudgeType: 'recovery_break',
         priority: 'high',
-        title: 'Balance load with recovery',
-        message:
-          'Workload and recovery look out of balance. Take a recovery break before the next hard task.',
-        actionLabel: 'Schedule break',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: 'recovery',
         pattern,
         summary
       });
-    case 'volatile_recent_pattern':
+    }
+    case 'volatile_recent_pattern': {
+      const selected = copy({
+        title: 'Keep the next step steady',
+        message:
+          'Recent check-ins have shifted. Keep the next task simple, then pause.',
+        actionLabel: 'Simplify one task'
+      });
       return buildRecommendation({
         nudgeType: 'stabilize_routine',
         priority,
-        title: 'Keep today steady',
-        message:
-          'Your scores have been shifting a lot. Keep the next step simple: water, one focused task, then a reset.',
-        actionLabel: 'Stabilize',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: 'stabilize_routine',
         pattern,
         summary
       });
-    case 'dominant_exhaustion':
+    }
+    case 'dominant_exhaustion': {
+      const selected = copy({
+        title: 'Give energy room to recover',
+        message:
+          'Emotional energy is the clearest signal. Choose an earlier wind-down tonight.',
+        actionLabel: 'Wind down earlier'
+      });
       return buildRecommendation({
         nudgeType: 'sleep_wind_down',
         priority,
-        title: 'Support emotional energy',
-        message:
-          'Emotional exhaustion is the strongest signal. Protect sleep tonight and skip one optional task.',
-        actionLabel: 'Set wind-down',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: 'recovery',
         pattern,
         summary
       });
-    case 'dominant_recovery':
+    }
+    case 'dominant_recovery': {
+      const selected = copy({
+        title: 'Make space for recovery',
+        message:
+          'Recovery is the clearest signal. Take one off-screen break before your next task.',
+        actionLabel: 'Take a break'
+      });
       return buildRecommendation({
         nudgeType: 'recovery_break',
         priority,
-        title: 'Recovery needs attention',
-        message:
-          'Recovery is the part that needs care today. Take an off-screen break or stop a little earlier.',
-        actionLabel: 'Take break',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: 'recovery',
         pattern,
         summary
       });
-    case 'dominant_workload':
+    }
+    case 'dominant_workload': {
+      const selected = copy({
+        title: 'Make workload lighter',
+        message:
+          'Workload is the clearest signal. Make one task smaller today.',
+        actionLabel: 'Reduce one task'
+      });
       return buildRecommendation({
         nudgeType: 'workload_boundary',
         priority,
-        title: 'Trim the load',
-        message:
-          'Workload is the strongest signal. Set one small boundary that makes the rest of today lighter.',
-        actionLabel: 'Set boundary',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: 'workload',
         pattern,
         summary
       });
-    case 'dominant_connection':
+    }
+    case 'dominant_connection': {
+      const selected = copy({
+        title: 'Reconnect in one small way',
+        message:
+          'Connection is the clearest signal. Check in briefly with someone you trust.',
+        actionLabel: 'Check in'
+      });
       return buildRecommendation({
         nudgeType: 'connection_reset',
         priority,
-        title: 'Reconnect gently',
-        message:
-          'Detachment is standing out. Try a brief check-in with someone or one grounding activity.',
-        actionLabel: 'Reconnect',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: 'connection',
         pattern,
         summary
       });
-    case 'dominant_progress':
+    }
+    case 'dominant_progress': {
+      const selected = copy({
+        title: 'Make one win visible',
+        message:
+          'Progress feels harder in recent check-ins. Finish one small task and mark it done.',
+        actionLabel: 'Finish one task'
+      });
       return buildRecommendation({
         nudgeType: 'small_win',
         priority,
-        title: 'Make progress visible',
-        message:
-          'Recent weekly context suggests progress has felt harder. Pick one small task you can finish and mark it done.',
-        actionLabel: 'Choose one win',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: 'progress',
         pattern,
         summary
       });
-    case 'low_confidence_score':
+    }
+    case 'low_confidence_score': {
+      const selected = copy({
+        title: 'Build a clearer pattern',
+        message:
+          'Recent coverage is limited. Complete the check-in currently due when you can.',
+        actionLabel: 'Complete check-in'
+      });
       return buildRecommendation({
         nudgeType: 'complete_check_in',
         priority: 'low',
-        title: 'Improve recommendation quality',
-        message:
-          'Limited daily coverage or weekly context makes nudges less precise. Complete the check-in currently due when you can.',
-        actionLabel: 'Complete check-in',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: 'data_completion',
         pattern,
         summary
       });
-    case 'insufficient_recent_data':
+    }
+    case 'insufficient_recent_data': {
+      const selected = copy({
+        title: 'Build your recent pattern',
+        message:
+          'A few recent check-ins will make guidance clearer. Log one quick check-in today.',
+        actionLabel: 'Log today'
+      });
       return buildRecommendation({
         nudgeType: 'complete_check_in',
         priority: 'low',
-        title: 'Build your trend baseline',
-        message:
-          'VitalySync needs a few recent check-ins to adapt well. A quick daily log is enough for today.',
-        actionLabel: 'Log today',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: 'data_completion',
         pattern,
         summary
       });
-    case 'improving_recent_recovery':
+    }
+    case 'improving_recent_recovery': {
+      const selected = copy({
+        title: 'Keep what is helping',
+        message:
+          'Your recent pattern is improving. Keep one recovery habit simple today.',
+        actionLabel: 'Keep it simple'
+      });
       return buildRecommendation({
         nudgeType: 'maintain_recovery',
         priority: 'low',
-        title: 'Keep the recovery trend',
-        message:
-          'Your recent trend is improving. Keep one recovery habit steady instead of adding more today.',
-        actionLabel: 'Keep routine',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: 'maintain_recovery',
         pattern,
         summary
       });
-    default:
+    }
+    default: {
+      const selected = copy({
+        title: 'Keep what is working',
+        message:
+          'Your recent pattern is steady. Keep one recovery habit simple today.',
+        actionLabel: 'Keep it simple'
+      });
       return buildRecommendation({
         nudgeType: 'steady_routine',
         priority: 'low',
-        title: 'Keep today steady',
-        message:
-          'Your recent pattern is steady. Keep hydration, movement, and a clear stop time simple today.',
-        actionLabel: 'Continue',
+        ...selected,
         triggerReason: pattern.title,
         recommendedFocus: pattern.recommended_focus ?? 'maintenance',
         pattern,
         summary
       });
+    }
   }
 }
 
@@ -355,33 +485,31 @@ export function stateRecommendation(summary) {
   }
 
   if (state === 'critical' || latest?.risk_level === 'critical') {
+    const copy = fallbackCopyForSeverity('critical');
     return buildRecommendation({
       nudgeType: 'support_check',
       priority: 'urgent',
-      title: 'Use extra support today',
-      message:
-        'The multi-day pattern is in a critical range. Lower what you can today and consider trusted support.',
-      actionLabel: 'Reduce load',
+      ...copy,
       triggerReason: summary.adaptive_state?.reason ?? 'Critical pattern',
       recommendedFocus: 'support',
       pattern: summary.patterns?.[0],
       summary,
+      internalSeverity: 'critical',
       metadata: { state_driven: true }
     });
   }
 
   if (state === 'high_risk') {
+    const copy = fallbackCopyForSeverity('high');
     return buildRecommendation({
       nudgeType: 'load_reduction_check',
       priority: 'high',
-      title: "Lower today's pressure",
-      message:
-        'Recent data shows high risk. Choose one thing to pause, delegate, or make easier today.',
-      actionLabel: 'Lower pressure',
+      ...copy,
       triggerReason: summary.adaptive_state?.reason ?? 'High risk pattern',
       recommendedFocus: 'load_reduction',
       pattern: summary.patterns?.[0],
       summary,
+      internalSeverity: 'high',
       metadata: { state_driven: true }
     });
   }
@@ -465,16 +593,52 @@ export async function loadNudgePersonalizationProfile(client, userId) {
 
 export function personalizeNudgeRecommendation(recommendation, personalization) {
   const userDisplayName = personalization?.displayName ?? null;
+  const personalizedMessage = prependDisplayName(
+    recommendation.message,
+    userDisplayName
+  );
+  const validation = validateNudgeCopy({
+    title: recommendation.title,
+    message: personalizedMessage,
+    actionLabel: recommendation.action_label,
+    displayName: userDisplayName
+  });
+  const fallbackCopy = fallbackCopyForSeverity(recommendation.severity);
+  const shouldFallback = !validation.valid;
+  const selectedCopy = shouldFallback
+    ? {
+      ...fallbackCopy,
+      message: prependDisplayName(fallbackCopy.message, userDisplayName)
+    }
+    : {
+      title: validation.copy.title,
+      message: validation.copy.message,
+      actionLabel: validation.copy.actionLabel
+    };
+  const fallbackValidation = shouldFallback
+    ? validateNudgeCopy({
+      title: selectedCopy.title,
+      message: selectedCopy.message,
+      actionLabel: selectedCopy.actionLabel,
+      displayName: userDisplayName
+    })
+    : validation;
 
   return {
     ...recommendation,
-    message: prependDisplayName(recommendation.message, userDisplayName),
+    title: selectedCopy.title,
+    message: selectedCopy.message,
+    action_label: selectedCopy.actionLabel,
     metadata: {
       ...recommendation.metadata,
-      title: recommendation.title,
+      title: selectedCopy.title,
       user_display_name: userDisplayName,
       personalization_profile: personalization?.profile ?? {},
-      profile_variables_used: personalizationVariables(personalization)
+      profile_variables_used: personalizationVariables(personalization),
+      copy_validation_status: fallbackValidation.valid
+        ? (shouldFallback ? 'fallback' : 'valid')
+        : 'invalid',
+      copy_validation_errors: validation.errors
     }
   };
 }
@@ -509,9 +673,9 @@ async function loadNudgeThrottlePreferences(client, userId) {
   };
 }
 
-async function loadRecentNudgeEvents(client, userId) {
+export async function loadRecentNudgeEvents(client, userId) {
   const result = await client.query(
-    `SELECT nudge_event_id, nudge_type, status, created_at
+    `SELECT nudge_event_id, nudge_type, status, metadata, created_at
      FROM nudge_events
      WHERE user_id = $1
        AND created_at >= NOW() - INTERVAL '7 days'
@@ -555,6 +719,17 @@ function eventMatchesRecommendation(event, recommendation) {
   );
 }
 
+function feedbackMatch(event, recommendation) {
+  const metadata = eventMetadata(event);
+  return {
+    type: event.nudge_type === recommendation.nudge_type,
+    focus: Boolean(
+      recommendation.recommended_focus &&
+      metadata.recommended_focus === recommendation.recommended_focus
+    )
+  };
+}
+
 export function applyRecentFeedback(recommendations, recentEvents, preferences) {
   const now = new Date();
   const shownTodayCount = recentEvents.filter((event) =>
@@ -569,16 +744,35 @@ export function applyRecentFeedback(recommendations, recentEvents, preferences) 
         event.nudge_type === recommendation.nudge_type &&
         ['shown', 'completed', 'snoozed'].includes(event.status)
       );
-      const dismissedRecently = recentEvents.some((event) =>
+      const recentlyDismissedEvents = recentEvents.filter((event) =>
         eventMatchesRecommendation(event, recommendation) &&
         event.status === 'dismissed' &&
         hoursSince(event.created_at, now) < preferences.cooldownHours
       );
-      const acceptedRecently = recentEvents.some((event) =>
+      const recentlyAcceptedEvents = recentEvents.filter((event) =>
         eventMatchesRecommendation(event, recommendation) &&
         ['accepted', 'completed'].includes(event.status) &&
         hoursSince(event.created_at, now) <= 7 * 24
       );
+      const dismissedType = recentlyDismissedEvents.some((event) =>
+        feedbackMatch(event, recommendation).type
+      );
+      const dismissedFocus = recentlyDismissedEvents.some((event) =>
+        feedbackMatch(event, recommendation).focus
+      );
+      const acceptedType = recentlyAcceptedEvents.some((event) =>
+        feedbackMatch(event, recommendation).type
+      );
+      const acceptedFocus = recentlyAcceptedEvents.some((event) =>
+        feedbackMatch(event, recommendation).focus
+      );
+      const dismissedRecently = dismissedType || dismissedFocus;
+      const acceptedRecently = acceptedType || acceptedFocus;
+      const feedbackRank =
+        (acceptedType ? 2 : 0) +
+        (acceptedFocus ? 1 : 0) -
+        (dismissedType ? 2 : 0) -
+        (dismissedFocus ? 1 : 0);
       const inCooldown =
         sameTypeEvent &&
         hoursSince(sameTypeEvent.created_at, now) < preferences.cooldownHours;
@@ -589,7 +783,9 @@ export function applyRecentFeedback(recommendations, recentEvents, preferences) 
       const adjusted = {
         ...recommendation,
         priority: dismissedRecently || throttled
-          ? (isStrongRecommendation(recommendation) ? 'medium' : 'low')
+          ? (isStrongRecommendation(recommendation)
+            ? recommendation.priority
+            : 'low')
           : recommendation.priority,
         metadata: {
           ...recommendation.metadata,
@@ -598,13 +794,22 @@ export function applyRecentFeedback(recommendations, recentEvents, preferences) 
           max_daily_nudges: preferences.maxDailyNudges,
           recent_daily_nudge_count: shownTodayCount,
           recently_dismissed: dismissedRecently,
+          recently_dismissed_type: dismissedType,
+          recently_dismissed_focus: dismissedFocus,
           recently_accepted: acceptedRecently,
+          recently_accepted_type: acceptedType,
+          recently_accepted_focus: acceptedFocus,
+          feedback_rank: feedbackRank,
           suppressed_by_feedback:
             dismissedRecently && !isStrongRecommendation(recommendation),
           throttled,
           throttle_reason: throttled
             ? (dailyLimitReached ? 'daily_limit' : 'cooldown')
-            : null
+            : null,
+          context_snapshot: {
+            ...(recommendation.metadata?.context_snapshot ?? {}),
+            preferred_nudge_style: preferences.preferredNudgeStyle
+          }
         }
       };
 
@@ -630,6 +835,13 @@ export function applyRecentFeedback(recommendations, recentEvents, preferences) 
       const priorityDiff = PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority];
       if (priorityDiff !== 0) {
         return priorityDiff;
+      }
+
+      const feedbackDiff =
+        Number(b.metadata?.feedback_rank ?? 0) -
+        Number(a.metadata?.feedback_rank ?? 0);
+      if (feedbackDiff !== 0) {
+        return feedbackDiff;
       }
 
       const aAccepted = a.metadata?.recently_accepted === true ? 1 : 0;

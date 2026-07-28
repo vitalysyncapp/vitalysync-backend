@@ -112,6 +112,15 @@ function publicSchedule(status, nextDueDate = status.nextDueDate) {
   };
 }
 
+function publicBaselineRefresh(status) {
+  return {
+    requires_baseline_refresh: status.requires_baseline_refresh === true,
+    baseline_refresh_reason: status.baseline_refresh_reason ?? null,
+    last_logged_date: status.last_logged_date ?? null,
+    days_since_last_log: status.days_since_last_log ?? null
+  };
+}
+
 async function persistDailyLog(
   client,
   { userId, logDate, daily, idempotencyKey, restoreDecision }
@@ -361,6 +370,7 @@ export async function getCheckInStatus({ userId: rawUserId, logDate, database = 
     return {
       required_mode: schedule.requiredMode,
       has_today_log: dailyLog != null,
+      ...publicBaselineRefresh(schedule),
       schedule: publicSchedule(schedule),
       existing_check_in: {
         daily: dailyLog,
@@ -407,6 +417,15 @@ export async function submitCheckIn({
     });
     if (!schedule) {
       throw serviceError('User not found', 404, 'USER_NOT_FOUND');
+    }
+
+    if (schedule.requires_baseline_refresh) {
+      throw serviceError(
+        'A fresh burnout baseline is needed before this check-in',
+        409,
+        'BASELINE_REFRESH_REQUIRED',
+        publicBaselineRefresh(schedule)
+      );
     }
 
     if (schedule.requiredMode === 'weekly' && requestedMode === 'daily') {

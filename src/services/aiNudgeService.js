@@ -2,13 +2,19 @@ import crypto from 'crypto';
 
 import OpenAI from 'openai';
 
+import {
+  NUDGE_COPY_LIMITS,
+  validateNudgeCopy
+} from './nudgeCopyPolicy.js';
+import { toUserFacingNudgeSeverity } from './nudgeSeverityPolicy.js';
+
 const DEFAULT_OPENAI_NUDGE_MODEL = 'gpt-5.4-mini';
-const PROMPT_VERSION = 'ai_nudge_v3_personalized';
-const MAX_TITLE_LENGTH = 48;
-const MAX_MESSAGE_LENGTH = 180;
-const MAX_WHY_LENGTH = 120;
-const MAX_ACTION_LENGTH = 52;
-const MAX_SAFETY_LENGTH = 100;
+const PROMPT_VERSION = 'ai_nudge_v4_copy_policy';
+const MAX_TITLE_LENGTH = NUDGE_COPY_LIMITS.title;
+const MAX_MESSAGE_LENGTH = NUDGE_COPY_LIMITS.message;
+const MAX_WHY_LENGTH = NUDGE_COPY_LIMITS.reason;
+const MAX_ACTION_LENGTH = NUDGE_COPY_LIMITS.actionLabel;
+const MAX_SAFETY_LENGTH = NUDGE_COPY_LIMITS.safetyNote;
 
 let openaiClient = null;
 
@@ -25,19 +31,28 @@ const AI_NUDGE_SCHEMA = {
     'safety_note'
   ],
   properties: {
-    title: { type: 'string' },
-    message: { type: 'string' },
-    why_this_matters: { type: 'string' },
-    suggested_action: { type: 'string' },
+    title: { type: 'string', minLength: 1, maxLength: MAX_TITLE_LENGTH },
+    message: { type: 'string', minLength: 1, maxLength: MAX_MESSAGE_LENGTH },
+    why_this_matters: { type: 'string', maxLength: MAX_WHY_LENGTH },
+    suggested_action: {
+      type: 'string',
+      minLength: 1,
+      maxLength: MAX_ACTION_LENGTH
+    },
     action_steps: {
       type: 'array',
-      items: { type: 'string' }
+      maxItems: 1,
+      items: {
+        type: 'string',
+        minLength: 1,
+        maxLength: NUDGE_COPY_LIMITS.actionStep
+      }
     },
     tone: {
       type: 'string',
       enum: ['Gentle', 'Direct', 'Motivational', 'Data-Driven']
     },
-    safety_note: { type: 'string' }
+    safety_note: { type: 'string', maxLength: MAX_SAFETY_LENGTH }
   }
 };
 
@@ -66,24 +81,15 @@ function safeString(value, fallback = '') {
   return String(value ?? fallback).trim();
 }
 
-function truncate(value, maxLength) {
-  const normalized = safeString(value);
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-
-  return `${normalized.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
-}
-
-export function ensureNameInMessage(message, displayName, maxLength = MAX_MESSAGE_LENGTH) {
+export function ensureNameInMessage(message, displayName) {
   const normalized = safeString(message);
   const name = safeString(displayName);
   if (!normalized || !name) {
-    return truncate(normalized, maxLength);
+    return normalized;
   }
 
   if (normalized.toLowerCase().includes(name.toLowerCase())) {
-    return truncate(normalized, maxLength);
+    return normalized;
   }
 
   const shouldLowerFirst = !normalized.startsWith('VitalySync');
@@ -91,10 +97,7 @@ export function ensureNameInMessage(message, displayName, maxLength = MAX_MESSAG
     ? `${normalized[0].toLowerCase()}${normalized.slice(1)}`
     : normalized;
 
-  return truncate(
-    `${name}, ${personalizedMessage}`,
-    maxLength
-  );
+  return `${name}, ${personalizedMessage}`;
 }
 
 function normalizeActionSteps(value) {
@@ -103,49 +106,46 @@ function normalizeActionSteps(value) {
   }
 
   return value
-    .map((step) => truncate(step, 58))
+    .map((step) => safeString(step))
     .filter((step) => step.length > 0)
-    .slice(0, 2);
+    .slice(0, 1);
 }
 
-function containsUnsafeDiagnosisLanguage(payload) {
-  const text = [
-    payload.title,
-    payload.message,
-    payload.why_this_matters,
-    payload.suggested_action,
-    payload.safety_note,
-    ...(payload.action_steps ?? [])
-  ].join(' ').toLowerCase();
-
-  return [
-    'you are burned out',
-    'you have burnout',
-    'diagnosed',
-    'clinical diagnosis',
-    'medical diagnosis'
-  ].some((phrase) => text.includes(phrase));
-}
-
-function normalizeAiOutput(payload, fallbackTone) {
+function normalizeAiOutput(payload, fallbackTone, displayName) {
   const normalized = {
-    title: truncate(payload?.title, MAX_TITLE_LENGTH),
-    message: truncate(payload?.message, MAX_MESSAGE_LENGTH),
-    why_this_matters: truncate(payload?.why_this_matters, MAX_WHY_LENGTH),
-    suggested_action: truncate(payload?.suggested_action, MAX_ACTION_LENGTH),
+    title: safeString(payload?.title),
+    message: safeString(payload?.message),
+    why_this_matters: safeString(payload?.why_this_matters),
+    suggested_action: safeString(payload?.suggested_action),
     action_steps: normalizeActionSteps(payload?.action_steps),
     tone: safeString(payload?.tone, fallbackTone),
-    safety_note: truncate(payload?.safety_note, MAX_SAFETY_LENGTH)
+    safety_note: safeString(payload?.safety_note)
   };
+  const detailsWithinLimits =
+    normalized.why_this_matters.length <= MAX_WHY_LENGTH &&
+    normalized.safety_note.length <= MAX_SAFETY_LENGTH &&
+    normalized.action_steps.every(
+      (step) => step.length <= NUDGE_COPY_LIMITS.actionStep
+    );
+  const validation = validateNudgeCopy({
+    title: normalized.title,
+    message: normalized.message,
+    actionLabel: normalized.suggested_action,
+    displayName,
+    additionalText: [
+      normalized.why_this_matters,
+      normalized.safety_note,
+      ...normalized.action_steps
+    ]
+  });
 
-  if (
-    !normalized.title ||
-    !normalized.message ||
-    !normalized.suggested_action ||
-    containsUnsafeDiagnosisLanguage(normalized)
-  ) {
+  if (!detailsWithinLimits || !validation.valid) {
     return null;
   }
+
+  normalized.title = validation.copy.title;
+  normalized.message = validation.copy.message;
+  normalized.suggested_action = validation.copy.actionLabel;
 
   if (!['Gentle', 'Direct', 'Motivational', 'Data-Driven'].includes(normalized.tone)) {
     normalized.tone = fallbackTone;
@@ -192,6 +192,7 @@ export function buildAiContext(
       recommended_focus: recommendation.recommended_focus,
       pattern_type: recommendation.pattern_type,
       severity: recommendation.severity,
+      internal_severity: metadata.internal_severity ?? null,
       confidence_score: recommendation.confidence_score
     },
     burnout_context: {
@@ -235,6 +236,12 @@ export function buildAiContext(
     guardrails: {
       do_not_change_priority_or_risk: true,
       do_not_diagnose: true,
+      user_facing_severity: toUserFacingNudgeSeverity(
+        recommendation.severity,
+        recommendation.priority
+      ),
+      message_max_characters: MAX_MESSAGE_LENGTH,
+      use_one_concrete_action: true,
       keep_behavioral_and_small: true,
       do_not_reference_email_age_or_gender: true,
       output_language: 'English'
@@ -312,7 +319,7 @@ export async function enhanceNudgeRecommendation(
             {
               type: 'input_text',
               text:
-                'You write short, human wellness nudges for VitalySync. Preserve deterministic risk, priority, trigger, and focus. Do not diagnose burnout. Do not invent data. Use the username once in the message when available. Use at most one relevant profile detail, and only if it makes the nudge clearer. Do not mention email, age, or gender. Sound warm, direct, and natural, not clinical. Use plain everyday language that is easy to understand on a quick read. Keep it brief: one complete message sentence, one short reason sentence, and at most two small action steps. Keep the message objective and based only on the supplied trend or pattern. Avoid hype, vague encouragement, or generic wellness advice. Return JSON only.'
+                'You write short, human wellness nudges for VitalySync. Preserve deterministic priority, trigger, focus, and user-facing severity. Never show the words critical or urgent; use needs support for the strongest state. Do not diagnose burnout and do not invent data. Start the message with the username followed by a comma when one is available, and use that username exactly once across the full output. Use at most one subtle profile detail only when useful. Do not mention email, age, or gender. Give one concrete action and at most one short reason. Return no more than one action step, and make it restate the same action instead of adding another. Keep the message at 140 characters or fewer. Sound warm, direct, natural, and non-clinical. Avoid hype, promises, generic lectures, and unsupported claims. Return JSON only.'
             }
           ]
         },
@@ -322,7 +329,7 @@ export async function enhanceNudgeRecommendation(
             {
               type: 'input_text',
               text:
-                'Rewrite this nudge so it feels personal, concise, and easy to act on. Use complete thoughts, not fragments. Make the wording more human and understandable while staying objective. If a username is supplied, include it naturally once in the message. No long explanations. No generic wellness lecture. Stay inside the supplied context.\n\nContext JSON:\n' +
+                'Polish the deterministic nudge without changing its meaning or intensity. Keep one action, one useful reason at most, and stay inside the supplied context.\n\nContext JSON:\n' +
                 JSON.stringify(context)
             }
           ]
@@ -338,9 +345,14 @@ export async function enhanceNudgeRecommendation(
       }
     });
     const parsed = parseJsonResponse(response);
+    const displayName = context.personal_context.user_display_name;
     const normalized = normalizeAiOutput(
-      parsed,
-      preferences.preferredNudgeStyle
+      {
+        ...parsed,
+        message: ensureNameInMessage(parsed?.message, displayName)
+      },
+      preferences.preferredNudgeStyle,
+      displayName
     );
 
     if (!normalized) {
@@ -356,14 +368,10 @@ export async function enhanceNudgeRecommendation(
       return recommendation;
     }
 
-    const personalizedMessage = ensureNameInMessage(
-      normalized.message,
-      context.personal_context.user_display_name
-    );
     const enhancedRecommendation = {
       ...recommendation,
       title: normalized.title,
-      message: personalizedMessage,
+      message: normalized.message,
       action_label: normalized.suggested_action,
       metadata: {
         ...recommendation.metadata,

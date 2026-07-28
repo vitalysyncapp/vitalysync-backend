@@ -250,6 +250,23 @@ test('onboarding persists server-calculated body metrics', async () => {
         return { rowCount: 1, rows: [] };
       }
 
+      if (text.includes('FROM user_baseline_epochs')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('INSERT INTO user_baseline_epochs')) {
+        return {
+          rowCount: 1,
+          rows: [{
+            baseline_epoch_id: 1,
+            user_id: 1,
+            started_at: '2026-07-28',
+            ended_at: null,
+            reset_reason: 'initial_onboarding',
+          }],
+        };
+      }
+
       throw new Error(`Unexpected query: ${text}`);
     },
     release() {},
@@ -476,6 +493,18 @@ test('burnout baseline retake rejects invalid Likert values', async () => {
   );
 });
 
+test('burnout baseline retake rejects an impossible local baseline date', async () => {
+  await assert.rejects(
+    () => updateUserBurnoutBaseline(1, {
+      burnout_answers: baselineAnswers(),
+      baseline_date: '2026-02-30'
+    }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'Valid baseline_date is required'
+  );
+});
+
 test('burnout baseline retake rejects users without onboarding profiles', async () => {
   const originalConnect = pool.connect;
   const queries = [];
@@ -518,4 +547,104 @@ test('burnout baseline retake rejects users without onboarding profiles', async 
   }
 
   assert.ok(queries.includes('ROLLBACK'));
+});
+
+test('thirty-day baseline refresh starts a new epoch before the next score', async () => {
+  const originalConnect = pool.connect;
+  const queries = [];
+  const fakeClient = {
+    async query(text, values = []) {
+      const normalized = text.replace(/\s+/g, ' ').trim();
+      queries.push({ text: normalized, values });
+
+      if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(normalized)) {
+        return { rowCount: 0, rows: [] };
+      }
+      if (normalized.includes('SELECT user_id FROM users') && normalized.includes('FOR UPDATE')) {
+        return { rowCount: 1, rows: [{ user_id: 1 }] };
+      }
+      if (normalized.startsWith('UPDATE user_onboarding_profiles')) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: 1,
+            user_id: 1,
+            initial_burnout_score: 35,
+            initial_burnout_level: 'Moderate'
+          }]
+        };
+      }
+      if (normalized.startsWith('SELECT (SELECT MAX(log_date)')) {
+        return {
+          rowCount: 1,
+          rows: [{
+            last_logged_date: '2026-06-01',
+            baseline_epoch_started_at: '2026-05-01'
+          }]
+        };
+      }
+      if (normalized.startsWith('INSERT INTO user_onboarding_answers')) {
+        return { rowCount: 1, rows: [] };
+      }
+      if (
+        normalized.includes('FROM user_baseline_epochs') &&
+        normalized.includes('FOR UPDATE')
+      ) {
+        return {
+          rowCount: 1,
+          rows: [{
+            baseline_epoch_id: 1,
+            user_id: 1,
+            started_at: '2026-05-01',
+            ended_at: null,
+            reset_reason: 'initial_onboarding'
+          }]
+        };
+      }
+      if (normalized.startsWith('UPDATE user_baseline_epochs')) {
+        return { rowCount: 1, rows: [] };
+      }
+      if (normalized.startsWith('INSERT INTO user_baseline_epochs')) {
+        return {
+          rowCount: 1,
+          rows: [{
+            baseline_epoch_id: 2,
+            user_id: 1,
+            started_at: '2026-07-28',
+            ended_at: null,
+            reset_reason: 'thirty_day_return'
+          }]
+        };
+      }
+      if (normalized === 'SELECT log_date FROM daily_logs WHERE user_id = $1 AND log_date BETWEEN $2 AND $3 ORDER BY log_date ASC') {
+        return { rowCount: 0, rows: [] };
+      }
+      if (normalized.includes('FROM burnout_score_history')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      throw new Error(`Unexpected query: ${normalized}`);
+    },
+    release() {}
+  };
+
+  pool.connect = async () => fakeClient;
+
+  try {
+    const response = await updateUserBurnoutBaseline(1, {
+      burnout_answers: baselineAnswers()
+    });
+
+    assert.equal(response.baseline_epoch_id, 2);
+    assert.equal(response.baseline_refresh_reason, 'thirty_day_return');
+    assert.equal(response.latest_score, null);
+    assert.ok(queries.some(({ text }) =>
+      text.startsWith('UPDATE user_baseline_epochs')
+    ));
+    assert.ok(queries.some(({ text }) =>
+      text.startsWith('INSERT INTO user_baseline_epochs')
+    ));
+  } finally {
+    pool.connect = originalConnect;
+  }
 });

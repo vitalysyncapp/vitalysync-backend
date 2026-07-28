@@ -8,6 +8,10 @@ import {
   getWeekStartDate,
 } from '../src/services/burnoutScoringEngine.js';
 import { analyzeBurnoutPatterns } from '../src/services/burnoutPatternService.js';
+import {
+  calculateBaselinePolicy,
+  detectReturnState
+} from '../src/services/burnoutEvidencePolicy.js';
 
 function repeated(value) {
   return Array.from({ length: 5 }, () => value);
@@ -212,7 +216,7 @@ function completeWeeklyPulse(overrides = {}) {
   };
 }
 
-test('phase 3 burnout scoring uses daily signals and weekly pulse context', () => {
+test('burnout engine v4 uses daily signals and weekly pulse context', () => {
   const snapshot = calculateDailyBurnoutSnapshot({
     userId: 3,
     scoreDate: '2026-05-18',
@@ -246,7 +250,7 @@ test('phase 3 burnout scoring uses daily signals and weekly pulse context', () =
 
   assert.ok(snapshot);
   assert.equal(snapshot.user_id, 3);
-  assert.equal(snapshot.scoring_version, 'phase3_v1');
+  assert.equal(snapshot.scoring_version, 'burnout_engine_v4_decay_v1');
   assert.ok(snapshot.overall_score > 50);
   assert.deepEqual(snapshot.source_snapshot.daily_log.exercise_names, [
     'Walking',
@@ -378,6 +382,181 @@ test('weekly pulse age reduces confidence without changing completeness', () => 
   assert.equal(snapshot.source_snapshot.weekly_pulse.freshness, 'aging');
 });
 
+test('baseline decay follows daily, pulse, and stable-pattern evidence', () => {
+  const common = {
+    epochStartedAt: '2026-05-01',
+    daysSinceEpochStart: 10,
+    logsLast14Days: 7,
+    logsLast28Days: 7,
+    averageConfidence7Day: 90,
+    averageCompleteness7Day: 90,
+    volatility7Day: 4,
+    hasAdditionalBehavioralSource: false
+  };
+
+  assert.equal(calculateBaselinePolicy({ ...common, loggedDayCount: 1 }).baselineWeight, 0.35);
+  assert.equal(calculateBaselinePolicy({ ...common, loggedDayCount: 2 }).baselineWeight, 0.30);
+  assert.equal(calculateBaselinePolicy({ ...common, loggedDayCount: 3 }).baselineWeight, 0.25);
+  assert.equal(calculateBaselinePolicy({ ...common, loggedDayCount: 5 }).baselineWeight, 0.18);
+  assert.equal(calculateBaselinePolicy({ ...common, loggedDayCount: 8 }).baselineWeight, 0.12);
+  assert.equal(calculateBaselinePolicy({
+    ...common,
+    loggedDayCount: 8,
+    weeklyPulseCount: 1
+  }).baselineWeight, 0.08);
+  assert.equal(calculateBaselinePolicy({
+    ...common,
+    loggedDayCount: 8,
+    weeklyPulseCount: 2
+  }).baselineWeight, 0);
+
+  const stable = calculateBaselinePolicy({
+    ...common,
+    daysSinceEpochStart: 14,
+    loggedDayCount: 10,
+    logsLast14Days: 10,
+    hasAdditionalBehavioralSource: true
+  });
+  assert.equal(stable.stablePatternDetected, true);
+  assert.equal(stable.baselineWeight, 0);
+});
+
+test('day one score persists the applied baseline policy and all daily inputs', () => {
+  const snapshot = calculateDailyBurnoutSnapshot({
+    userId: 3,
+    scoreDate: '2026-05-18',
+    weekStartDate: '2026-05-18',
+    baselineEpoch: {
+      baselineEpochId: 9,
+      startedAt: '2026-05-18'
+    },
+    baselineEvidence: {
+      loggedDayCount: 1,
+      logsLast14Days: 1,
+      logsLast28Days: 1,
+      weeklyPulseCount: 0,
+      activityRecordCount: 0,
+      recentScores: []
+    },
+    dailyLog: completeDailyLog({
+      perceived_stress_level: 4,
+      break_quality_level: 2,
+      daily_detachment_level: 3,
+      daily_focus_level: 2,
+      daily_accomplishment_level: 2,
+      exercise_goal_name: 'Walking',
+      exercise_goal_completed: false,
+      exercise_goal_source: 'recommendation',
+      exercise_goal_status: 'active'
+    }),
+    weeklyPulse: null,
+    activityLog: null,
+    profile: { initial_burnout_score: 60, workload_level: 3 }
+  });
+
+  assert.equal(snapshot.baseline_epoch_id, 9);
+  assert.equal(snapshot.source_snapshot.baseline_policy.baseline_weight, 0.35);
+  assert.equal(snapshot.source_snapshot.baseline_policy.window_used, '1_day');
+  assert.deepEqual(snapshot.source_snapshot.daily_log.symptom_names, ['None']);
+  assert.deepEqual(snapshot.source_snapshot.daily_log.habit_names, ['Quiet break']);
+  assert.equal(snapshot.source_snapshot.daily_log.exercise_goal_name, 'Walking');
+});
+
+test('dimension calculations separate low, mixed, and high-risk examples', () => {
+  const scoreFor = ({ daily, weekly, activity }) =>
+    calculateDailyBurnoutSnapshot({
+      userId: 3,
+      scoreDate: '2026-05-18',
+      weekStartDate: '2026-05-18',
+      dailyLog: completeDailyLog(daily),
+      weeklyPulse: completeWeeklyPulse(weekly),
+      activityLog: activity,
+      profile: null
+    });
+  const low = scoreFor({
+    daily: {
+      sleep_hours: 8,
+      sleep_quality: 4,
+      mood_index: 4,
+      energy_level: 5,
+      hydration_liters: 2,
+      workload_hours_band: '1-2 hours',
+      symptom_names: ['None'],
+      habit_names: ['Quiet break', 'Sunlight or fresh air', 'Deep breathing']
+    },
+    weekly: {
+      perceived_pressure_level: 1,
+      productivity_focus_level: 5,
+      recovery_rest_level: 5,
+      detachment_level: 1,
+      accomplishment_level: 5
+    },
+    activity: { active_minutes: 40, goal_completed: true }
+  });
+  const mixed = scoreFor({
+    daily: {},
+    weekly: {},
+    activity: { active_minutes: 20, goal_completed: false }
+  });
+  const high = scoreFor({
+    daily: {
+      sleep_hours: 4.5,
+      sleep_quality: 0,
+      mood_index: 0,
+      energy_level: 1,
+      hydration_liters: 0.5,
+      workload_hours_band: '10-12 hours',
+      exercise_names: ['None'],
+      symptom_names: ['Fatigue', 'Anxiety', 'Irritability'],
+      habit_names: ['None']
+    },
+    weekly: {
+      perceived_pressure_level: 5,
+      productivity_focus_level: 1,
+      recovery_rest_level: 1,
+      detachment_level: 5,
+      accomplishment_level: 1
+    },
+    activity: { active_minutes: 0, goal_completed: false }
+  });
+
+  assert.ok(low.overall_score < mixed.overall_score);
+  assert.ok(mixed.overall_score < high.overall_score);
+  for (const dimension of [
+    'emotional_exhaustion_score',
+    'detachment_score',
+    'reduced_accomplishment_score',
+    'workload_strain_score',
+    'recovery_deficit_score'
+  ]) {
+    assert.ok(low[dimension] < high[dimension], dimension);
+  }
+});
+
+test('thirty-day return clears after a newer baseline epoch begins', () => {
+  const required = detectReturnState({
+    lastLoggedDate: '2026-06-28',
+    localDate: '2026-07-28',
+    baselineEpochStartedAt: '2026-05-01'
+  });
+  assert.equal(required.requires_baseline_refresh, true);
+  assert.equal(required.days_since_last_log, 30);
+
+  const refreshed = detectReturnState({
+    lastLoggedDate: '2026-06-28',
+    localDate: '2026-07-28',
+    baselineEpochStartedAt: '2026-07-28'
+  });
+  assert.equal(refreshed.requires_baseline_refresh, false);
+
+  const expiredRefresh = detectReturnState({
+    lastLoggedDate: '2026-05-01',
+    localDate: '2026-07-28',
+    baselineEpochStartedAt: '2026-06-28'
+  });
+  assert.equal(expiredRefresh.requires_baseline_refresh, true);
+});
+
 test('burnout scoring exposes week start normalization for score refreshes', () => {
   assert.equal(getWeekStartDate('2026-05-18'), '2026-05-18');
   assert.equal(getWeekStartDate('2026-05-24'), '2026-05-18');
@@ -416,4 +595,61 @@ test('pattern summaries expose weekly context and soften low-confidence states',
   );
   assert.equal(summary.adaptive_state.state, 'limited_confidence');
   assert.equal(summary.adaptive_state.priority, 'low');
+  assert.deepEqual(Object.keys(summary.windows), [
+    '1_day',
+    '2_day',
+    '3_day',
+    '7_day',
+    '14_day',
+    '28_day'
+  ]);
+});
+
+test('pattern summaries keep the latest baseline epoch isolated', () => {
+  const summary = analyzeBurnoutPatterns([
+    {
+      score_date: '2026-05-01',
+      baseline_epoch_id: 1,
+      overall_score: 90,
+      risk_level: 'critical',
+      confidence_score: 90,
+      completeness_score: 90
+    },
+    {
+      score_date: '2026-05-20',
+      baseline_epoch_id: 2,
+      overall_score: 30,
+      risk_level: 'low',
+      confidence_score: 90,
+      completeness_score: 90
+    }
+  ], '2026-05-20');
+
+  assert.equal(summary.baseline_epoch_id, 2);
+  assert.equal(summary.windows['28_day'].available_days, 1);
+  assert.equal(summary.windows['28_day'].average_score, 30);
+});
+
+test('seven-day rising evidence triggers an adaptive recommendation pattern', () => {
+  const scores = [35, 38, 42, 47, 53, 60, 68].map((overallScore, index) => ({
+    score_date: `2026-05-${String(14 + index).padStart(2, '0')}`,
+    baseline_epoch_id: 2,
+    overall_score: overallScore,
+    risk_level: overallScore >= 60 ? 'high' : 'moderate',
+    emotional_exhaustion_score: overallScore,
+    detachment_score: overallScore - 5,
+    reduced_accomplishment_score: overallScore - 8,
+    workload_strain_score: overallScore,
+    recovery_deficit_score: overallScore - 3,
+    confidence_score: 90,
+    completeness_score: 100
+  }));
+
+  const summary = analyzeBurnoutPatterns(scores, '2026-05-20');
+
+  assert.ok(summary.patterns.some((pattern) =>
+    pattern.type === 'rising_recent_risk'
+  ));
+  assert.notEqual(summary.adaptive_state.state, 'insufficient_data');
+  assert.equal(summary.adaptive_state.recommended_focus, 'early_recovery');
 });

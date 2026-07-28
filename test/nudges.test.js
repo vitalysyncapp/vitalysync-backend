@@ -9,13 +9,21 @@ import {
 } from '../src/controllers/adaptive.controller.js';
 import {
   applyRecentFeedback,
+  loadRecentNudgeEvents,
   personalizeNudgeRecommendation,
+  recommendationFromPattern,
   stateRecommendation
 } from '../src/services/adaptiveNudgeService.js';
 import {
   buildAiContext,
+  enhanceNudgeRecommendation,
   ensureNameInMessage
 } from '../src/services/aiNudgeService.js';
+import {
+  NUDGE_COPY_LIMITS,
+  validateNudgeCopy
+} from '../src/services/nudgeCopyPolicy.js';
+import { toUserFacingNudgeSeverity } from '../src/services/nudgeSeverityPolicy.js';
 import { createMockResponse } from './controllerTestHelpers.js';
 
 function recommendation({
@@ -40,6 +48,29 @@ const feedbackPreferences = {
   cooldownHours: 8,
   maxDailyNudges: 4,
 };
+
+function patternSummary(pattern, { state = 'watch', confidence = 82 } = {}) {
+  return {
+    latest_score: { risk_level: pattern.severity, overall_score: 58 },
+    adaptive_state: {
+      state,
+      confidence_score: confidence,
+      reason: pattern.title
+    },
+    windows: {
+      '7_day': {
+        dominant_dimension: {
+          key: 'workload_strain_score',
+          label: 'Workload',
+          focus: 'workload',
+          average_score: 61
+        }
+      },
+      '14_day': {}
+    },
+    patterns: [pattern]
+  };
+}
 
 test('nudge recommendations validate user id before database work', async () => {
   const res = createMockResponse();
@@ -84,6 +115,21 @@ test('nudge event updates validate allowed statuses before database work', async
 
   assert.equal(res.statusCode, 400);
   assert.equal(res.body.message, 'Valid nudge status is required');
+});
+
+test('recent nudge feedback loads metadata needed for focus matching', async () => {
+  let querySql = '';
+  await loadRecentNudgeEvents(
+    {
+      query: async (sql) => {
+        querySql = sql;
+        return { rows: [] };
+      }
+    },
+    1
+  );
+
+  assert.match(querySql, /status, metadata, created_at/);
 });
 
 test('smart nudge feedback suppresses recently dismissed non-urgent types when alternatives exist', () => {
@@ -139,6 +185,90 @@ test('smart nudge feedback uses accepted status as same-priority tie breaker', (
   assert.equal(ranked[0].metadata.recently_accepted, true);
 });
 
+test('smart nudge feedback suppresses a disliked focus across nudge types', () => {
+  const ranked = applyRecentFeedback(
+    [
+      recommendation({
+        nudgeType: 'recovery_break',
+        recommendedFocus: 'recovery'
+      }),
+      recommendation({
+        nudgeType: 'small_win',
+        recommendedFocus: 'progress'
+      })
+    ],
+    [
+      {
+        nudge_type: 'sleep_wind_down',
+        status: 'dismissed',
+        created_at: new Date(),
+        metadata: { recommended_focus: 'recovery' }
+      }
+    ],
+    feedbackPreferences
+  );
+
+  assert.deepEqual(ranked.map((item) => item.nudge_type), ['small_win']);
+});
+
+test('smart nudge feedback slightly boosts an accepted focus across nudge types', () => {
+  const ranked = applyRecentFeedback(
+    [
+      recommendation({
+        nudgeType: 'small_win',
+        recommendedFocus: 'progress'
+      }),
+      recommendation({
+        nudgeType: 'recovery_break',
+        recommendedFocus: 'recovery'
+      })
+    ],
+    [
+      {
+        nudge_type: 'sleep_wind_down',
+        status: 'accepted',
+        created_at: new Date(),
+        metadata: { recommended_focus: 'recovery' }
+      }
+    ],
+    feedbackPreferences
+  );
+
+  assert.equal(ranked[0].nudge_type, 'recovery_break');
+  assert.equal(ranked[0].metadata.recently_accepted_focus, true);
+  assert.equal(ranked[0].metadata.recently_accepted_type, false);
+});
+
+test('smart nudge feedback keeps high recommendations visible after a dislike', () => {
+  const ranked = applyRecentFeedback(
+    [
+      recommendation({
+        nudgeType: 'load_reduction_check',
+        priority: 'high',
+        recommendedFocus: 'recovery'
+      }),
+      recommendation({
+        nudgeType: 'small_win',
+        priority: 'medium',
+        recommendedFocus: 'progress'
+      })
+    ],
+    [
+      {
+        nudge_type: 'sleep_wind_down',
+        status: 'dismissed',
+        created_at: new Date(),
+        metadata: { recommended_focus: 'recovery' }
+      }
+    ],
+    feedbackPreferences
+  );
+
+  assert.equal(ranked[0].nudge_type, 'load_reduction_check');
+  assert.equal(ranked[0].priority, 'high');
+  assert.equal(ranked[0].metadata.suppressed_by_feedback, false);
+});
+
 test('smart nudge feedback does not let accepted low priority outrank high priority nudges', () => {
   const ranked = applyRecentFeedback(
     [
@@ -192,6 +322,112 @@ test('smart nudge personalization adds username metadata without changing rankin
     'wellness_goals',
     'routine_times'
   ]);
+  assert.equal(personalized.metadata.copy_validation_status, 'valid');
+  assert.ok(personalized.message.length <= NUDGE_COPY_LIMITS.message);
+  assert.equal((personalized.message.match(/Vitaly/gi) ?? []).length, 1);
+});
+
+test('deterministic nudges match user-facing severity and contextual inputs', () => {
+  const cases = [
+    {
+      pattern: {
+        type: 'stable_current_pattern',
+        severity: 'low',
+        title: 'Pattern is stable',
+        recommended_focus: 'maintenance'
+      },
+      severity: 'steady',
+      phrase: /steady/i
+    },
+    {
+      pattern: {
+        type: 'rising_recent_risk',
+        severity: 'moderate',
+        title: 'Pressure is rising',
+        recommended_focus: 'early_recovery'
+      },
+      severity: 'watch',
+      phrase: /reset/i
+    },
+    {
+      pattern: {
+        type: 'dominant_workload',
+        severity: 'high',
+        title: 'Workload is strongest',
+        recommended_focus: 'workload'
+      },
+      severity: 'high',
+      phrase: /smaller/i
+    },
+    {
+      pattern: {
+        type: 'sustained_elevated_risk',
+        severity: 'critical',
+        title: 'Pattern needs support',
+        recommended_focus: 'load_reduction'
+      },
+      severity: 'needs support',
+      phrase: /someone you trust/i
+    }
+  ];
+
+  for (const item of cases) {
+    const result = recommendationFromPattern(
+      item.pattern,
+      patternSummary(item.pattern)
+    );
+    assert.equal(result.severity, item.severity);
+    assert.match(result.message, item.phrase);
+    assert.doesNotMatch(`${result.title} ${result.message}`, /critical|urgent/i);
+    assert.equal(
+      result.metadata.context_snapshot.latest_pattern_type,
+      item.pattern.type
+    );
+    assert.equal(
+      result.metadata.context_snapshot.dominant_dimension.focus,
+      'workload'
+    );
+    assert.equal(result.metadata.context_snapshot.confidence_score, 82);
+  }
+});
+
+test('copy policy blocks diagnosis, unsupported claims, long copy, and bad username use', () => {
+  const diagnosis = validateNudgeCopy({
+    title: 'A clear answer',
+    message: 'Alex, you have burnout and should stop.',
+    actionLabel: 'Stop',
+    displayName: 'Alex'
+  });
+  const unsupported = validateNudgeCopy({
+    title: 'A guaranteed reset',
+    message: 'Alex, this will cure stress. Take a pause.',
+    actionLabel: 'Pause',
+    displayName: 'Alex'
+  });
+  const tooLong = validateNudgeCopy({
+    title: 'Take a reset',
+    message: `Alex, ${'x'.repeat(NUDGE_COPY_LIMITS.message)}`,
+    actionLabel: 'Pause',
+    displayName: 'Alex'
+  });
+  const duplicateName = validateNudgeCopy({
+    title: 'Take a reset',
+    message: 'Alex, take one short reset, Alex.',
+    actionLabel: 'Pause',
+    displayName: 'Alex'
+  });
+
+  assert.ok(diagnosis.errors.includes('diagnosis_language'));
+  assert.ok(unsupported.errors.includes('unsupported_claim'));
+  assert.ok(tooLong.errors.includes('message_too_long'));
+  assert.ok(duplicateName.errors.includes('username_count'));
+});
+
+test('internal urgent and critical severity maps to needs support', () => {
+  assert.equal(toUserFacingNudgeSeverity('critical'), 'needs support');
+  assert.equal(toUserFacingNudgeSeverity('urgent'), 'needs support');
+  assert.equal(toUserFacingNudgeSeverity('high_risk'), 'high');
+  assert.equal(toUserFacingNudgeSeverity('moderate'), 'watch');
 });
 
 test('low-confidence score states do not create urgent assistant nudges', () => {
@@ -239,7 +475,54 @@ test('AI nudge context carries personal context and keeps username in message lo
   );
   assert.equal(context.guardrails.do_not_change_priority_or_risk, true);
   assert.equal(context.guardrails.do_not_reference_email_age_or_gender, true);
+  assert.equal(context.guardrails.message_max_characters, 140);
+  assert.equal(context.guardrails.use_one_concrete_action, true);
   assert.match(ensureNameInMessage('Take one small step.', 'Alex'), /^Alex, /);
+});
+
+test('AI nudge enhancement returns deterministic fallback without AI', async () => {
+  const originalApiKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  const base = personalizeNudgeRecommendation(
+    recommendation({ nudgeType: 'small_win', recommendedFocus: 'progress' }),
+    { displayName: 'Alex', profile: {} }
+  );
+  const auditQueries = [];
+
+  try {
+    const result = await enhanceNudgeRecommendation(
+      {
+        query: async (sql, params) => {
+          auditQueries.push({ sql, params });
+          return { rowCount: 1, rows: [] };
+        }
+      },
+      1,
+      base,
+      {
+        summary: patternSummary({
+          type: 'stable_current_pattern',
+          severity: 'low',
+          title: 'Pattern is stable',
+          recommended_focus: 'maintenance'
+        }),
+        preferences: feedbackPreferences,
+        personalization: { displayName: 'Alex', profile: {} }
+      }
+    );
+
+    assert.equal(result.title, base.title);
+    assert.equal(result.message, base.message);
+    assert.equal(result.metadata.ai_enhanced, false);
+    assert.equal(result.metadata.ai_fallback, true);
+    assert.equal(auditQueries.length, 1);
+  } finally {
+    if (originalApiKey == null) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  }
 });
 
 test('nudge event creation casts reused status parameter for PostgreSQL', async () => {

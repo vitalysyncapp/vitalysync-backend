@@ -12,13 +12,17 @@ class ScheduleClient {
     schedule = null,
     firstLogDate = null,
     latestPulse = null,
-    todayPulse = null
+    todayPulse = null,
+    lastLoggedDate = null,
+    baselineEpochStartedAt = null
   } = {}) {
     this.pulseWeekday = pulseWeekday;
     this.schedule = schedule;
     this.firstLogDate = firstLogDate;
     this.latestPulse = latestPulse;
     this.todayPulse = todayPulse;
+    this.lastLoggedDate = lastLoggedDate;
+    this.baselineEpochStartedAt = baselineEpochStartedAt;
   }
 
   async query(sql, params = []) {
@@ -27,7 +31,12 @@ class ScheduleClient {
     if (normalized.includes('FROM users LEFT JOIN user_reminder_preferences')) {
       return {
         rowCount: 1,
-        rows: [{ user_id: params[0], pulse_weekday: this.pulseWeekday }]
+        rows: [{
+          user_id: params[0],
+          pulse_weekday: this.pulseWeekday,
+          last_logged_date: this.lastLoggedDate,
+          baseline_epoch_started_at: this.baselineEpochStartedAt
+        }]
       };
     }
 
@@ -224,4 +233,22 @@ test('late completion advances to the next configured weekday without stacking',
 
   assert.equal(nextDueDate, '2026-06-01');
   assert.equal(client.schedule.last_completed_due_date, '2026-05-25');
+});
+
+test('schedule status exposes the thirty-day baseline refresh contract', async () => {
+  const client = new ScheduleClient({
+    firstLogDate: '2026-05-01',
+    lastLoggedDate: '2026-06-28',
+    baselineEpochStartedAt: '2026-05-01'
+  });
+
+  const status = await getCheckInScheduleStatus(client, {
+    userId: 1,
+    localDate: '2026-07-28'
+  });
+
+  assert.equal(status.requires_baseline_refresh, true);
+  assert.equal(status.baseline_refresh_reason, 'thirty_day_return');
+  assert.equal(status.last_logged_date, '2026-06-28');
+  assert.equal(status.days_since_last_log, 30);
 });

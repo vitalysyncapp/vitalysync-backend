@@ -2,8 +2,9 @@ import {
   formatBurnoutScoreRow,
   upsertBurnoutScoresForRange
 } from './burnoutScoringService.js';
+import { BURNOUT_SCORING_VERSION } from './burnoutEvidencePolicy.js';
 
-const PATTERN_WINDOWS = [3, 7, 14, 28];
+const PATTERN_WINDOWS = [1, 2, 3, 7, 14, 28];
 const MAX_WINDOW_DAYS = Math.max(...PATTERN_WINDOWS);
 const DAILY_LOG_BACKED_SCORE_FILTER =
   "source_snapshot ? 'daily_log' AND source_snapshot->'daily_log' <> 'null'::jsonb";
@@ -290,6 +291,7 @@ function summarizeWindow(scores, days, endDate) {
     risk_level: riskLevelForScore(averageScore),
     points: currentScores.map((score) => ({
       score_date: score.score_date,
+      baseline_epoch_id: score.baseline_epoch_id ?? null,
       overall_score: score.overall_score,
       risk_level: score.risk_level,
       confidence_score: score.confidence_score,
@@ -593,6 +595,7 @@ async function loadScoresForPattern(client, userId, endDate) {
     `SELECT
        burnout_score_id,
        user_id,
+       baseline_epoch_id,
        score_date,
        overall_score,
        risk_level,
@@ -614,6 +617,21 @@ async function loadScoresForPattern(client, userId, endDate) {
      WHERE user_id = $1
        AND score_date BETWEEN $2 AND $3
        AND ${DAILY_LOG_BACKED_SCORE_FILTER}
+       AND scoring_version = '${BURNOUT_SCORING_VERSION}'
+       AND (
+         baseline_epoch_id = (
+           SELECT baseline_epoch_id
+           FROM user_baseline_epochs epoch
+           WHERE epoch.user_id = $1
+             AND epoch.started_at::DATE <= $3
+             AND (epoch.ended_at IS NULL OR epoch.ended_at::DATE >= $3)
+           ORDER BY epoch.started_at DESC, epoch.baseline_epoch_id DESC
+           LIMIT 1
+         )
+         OR NOT EXISTS (
+           SELECT 1 FROM user_baseline_epochs epoch WHERE epoch.user_id = $1
+         )
+       )
      ORDER BY score_date ASC`,
     [userId, startDate, endDate]
   );
@@ -622,9 +640,18 @@ async function loadScoresForPattern(client, userId, endDate) {
 }
 
 export function analyzeBurnoutPatterns(scores, endDate) {
-  const sortedScores = [...scores].sort((a, b) =>
+  const allSortedScores = [...scores].sort((a, b) =>
     a.score_date.localeCompare(b.score_date)
   );
+  const latestEligibleScore = [...allSortedScores]
+    .reverse()
+    .find((score) => score.score_date <= endDate) ?? null;
+  const latestEpochId = latestEligibleScore?.baseline_epoch_id ?? null;
+  const sortedScores = latestEpochId == null
+    ? allSortedScores.filter((score) => score.baseline_epoch_id == null)
+    : allSortedScores.filter(
+        (score) => String(score.baseline_epoch_id) === String(latestEpochId)
+      );
   const currentScores = sortedScores.filter((score) =>
     score.score_date <= endDate &&
     score.score_date >= addDays(endDate, -(MAX_WINDOW_DAYS - 1))
@@ -641,12 +668,14 @@ export function analyzeBurnoutPatterns(scores, endDate) {
   return {
     generated_at: new Date().toISOString(),
     end_date: endDate,
+    baseline_epoch_id: latestEpochId,
     latest_score: latestScore,
     adaptive_state: buildAdaptiveState(windows, patterns, latestScore),
     windows,
     patterns,
     timeline: currentScores.map((score) => ({
       score_date: score.score_date,
+      baseline_epoch_id: score.baseline_epoch_id ?? null,
       overall_score: score.overall_score,
       risk_level: score.risk_level,
       confidence_score: score.confidence_score

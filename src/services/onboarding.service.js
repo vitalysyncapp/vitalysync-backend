@@ -5,6 +5,11 @@ import {
   upsertBurnoutScoresForRange
 } from './burnoutScoringService.js';
 import { addDays, formatDateOnly } from './burnoutScoringEngine.js';
+import {
+  ensureBaselineEpochForDate,
+  startBaselineEpoch
+} from './baselineEpochService.js';
+import { detectReturnState } from './burnoutEvidencePolicy.js';
 import { ensureDefaultNutritionCalorieGoal } from './nutrition.service.js';
 
 const ROLE_OPTIONS = new Set([
@@ -241,6 +246,23 @@ function parseLikert(value, fieldName, { required = true } = {}) {
   }
 
   return parsed;
+}
+
+function normalizeDateOnly(value, fieldName) {
+  const normalized = String(value ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    throw new OnboardingServiceError(`Valid ${fieldName} is required`);
+  }
+
+  const parsed = new Date(`${normalized}T00:00:00.000Z`);
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== normalized
+  ) {
+    throw new OnboardingServiceError(`Valid ${fieldName} is required`);
+  }
+
+  return normalized;
 }
 
 function hasMetricValue(value) {
@@ -745,6 +767,8 @@ export async function submitRequiredOnboarding(payload) {
     const savedProfile = profileResult.rows[0];
     const user = userResult.rows[0];
 
+    await ensureBaselineEpochForDate(client, userId, formatDateOnly(new Date()));
+
     await ensureDefaultNutritionCalorieGoal({
       client,
       userId,
@@ -893,8 +917,9 @@ export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
   const userId = parseUserId(userIdValue);
   const burnoutAnswers = buildBurnoutAnswerRecords(payload?.burnout_answers);
   const scores = calculateBurnoutBaselineScore(burnoutAnswers);
-  const today = formatDateOnly(new Date());
-  const refreshStartDate = addDays(today, -27);
+  const today = payload?.baseline_date == null
+    ? formatDateOnly(new Date())
+    : normalizeDateOnly(payload.baseline_date, 'baseline_date');
   const client = await pool.connect();
 
   try {
@@ -955,7 +980,37 @@ export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
       throw new OnboardingServiceError('Onboarding profile not found', 404);
     }
 
+    const returnContextResult = await client.query(
+      `SELECT
+         (SELECT MAX(log_date) FROM daily_logs WHERE user_id = $1)
+           AS last_logged_date,
+         (
+           SELECT started_at
+           FROM user_baseline_epochs
+           WHERE user_id = $1 AND ended_at IS NULL
+           ORDER BY started_at DESC, baseline_epoch_id DESC
+           LIMIT 1
+         ) AS baseline_epoch_started_at`,
+      [userId]
+    );
+    const returnContext = returnContextResult.rows[0] ?? {};
+    const returnState = detectReturnState({
+      lastLoggedDate: returnContext.last_logged_date,
+      localDate: today,
+      baselineEpochStartedAt: returnContext.baseline_epoch_started_at
+    });
+
     await insertAnswerRecords(client, userId, burnoutAnswers);
+
+    const baselineEpoch = await startBaselineEpoch(client, userId, {
+      startedAt: today,
+      resetReason: returnState.requires_baseline_refresh
+        ? 'thirty_day_return'
+        : 'manual_baseline_refresh'
+    });
+    const refreshStartDate = baselineEpoch.startedAt > addDays(today, -27)
+      ? baselineEpoch.startedAt
+      : addDays(today, -27);
 
     const refreshedScores = await upsertBurnoutScoresForRange(
       client,
@@ -973,6 +1028,8 @@ export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
       message: 'Burnout baseline updated successfully',
       profile: savedProfile,
       scores,
+      baseline_epoch_id: baselineEpoch.baselineEpochId,
+      baseline_refresh_reason: baselineEpoch.resetReason,
       baseline_for_ai: buildAiBaseline(savedProfile),
       latest_score: latestScore,
       refreshed_scores_count: refreshedScores.length
