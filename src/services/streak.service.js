@@ -751,6 +751,7 @@ export async function readLeaderboard(userIdValue, options = {}) {
   const sectionFilter = buildSectionFilter(section, viewerContext, params);
   params.push(limit);
 
+
   const result = await client.query(
     `WITH latest_area AS (
        SELECT DISTINCT ON (user_id)
@@ -778,6 +779,8 @@ export async function readLeaderboard(userIdValue, options = {}) {
          ON profile.user_id = users.user_id
        LEFT JOIN latest_area
          ON latest_area.user_id = users.user_id
+       LEFT JOIN user_settings settings
+         ON settings.user_id = users.user_id
        LEFT JOIN (
          SELECT user_id, COUNT(*)::INTEGER AS protected_day_count
          FROM streak_protected_days
@@ -786,6 +789,7 @@ export async function readLeaderboard(userIdValue, options = {}) {
          ON protected_counts.user_id = users.user_id
        WHERE $1::INTEGER > 0
          AND ${sectionFilter.filterSql}
+         AND COALESCE(settings.hide_from_leaderboard, FALSE) = FALSE
      )
      SELECT *
      FROM scored
