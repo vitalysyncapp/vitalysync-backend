@@ -15,11 +15,13 @@ import {
   updateNotificationEventStatus,
   updateNudgeEventStatus
 } from '../controllers/adaptive.controller.js';
+import { createProductEvent } from '../controllers/productEvent.controller.js';
 
 const router = express.Router();
 
 router.get('/reminders', getReminderPreferences);
 router.put('/reminders', saveReminderPreferences);
+router.post('/product-events', createProductEvent);
 
 router.get(
   '/nudges/recommendations',

@@ -917,6 +917,14 @@ export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
   const userId = parseUserId(userIdValue);
   const burnoutAnswers = buildBurnoutAnswerRecords(payload?.burnout_answers);
   const scores = calculateBurnoutBaselineScore(burnoutAnswers);
+  const clientRefreshId = normalizeText(payload?.client_refresh_id);
+  if (
+    clientRefreshId != null &&
+    (clientRefreshId.length > 100 ||
+      !/^[A-Za-z0-9_-]{8,100}$/.test(clientRefreshId))
+  ) {
+    throw new OnboardingServiceError('Valid client_refresh_id is required');
+  }
   const today = payload?.baseline_date == null
     ? formatDateOnly(new Date())
     : normalizeDateOnly(payload.baseline_date, 'baseline_date');
@@ -1006,7 +1014,8 @@ export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
       startedAt: today,
       resetReason: returnState.requires_baseline_refresh
         ? 'thirty_day_return'
-        : 'manual_baseline_refresh'
+        : 'manual_baseline_refresh',
+      clientRefreshId
     });
     const refreshStartDate = baselineEpoch.startedAt > addDays(today, -27)
       ? baselineEpoch.startedAt
@@ -1029,6 +1038,7 @@ export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
       profile: savedProfile,
       scores,
       baseline_epoch_id: baselineEpoch.baselineEpochId,
+      client_refresh_id: baselineEpoch.clientRefreshId,
       baseline_refresh_reason: baselineEpoch.resetReason,
       baseline_for_ai: buildAiBaseline(savedProfile),
       latest_score: latestScore,

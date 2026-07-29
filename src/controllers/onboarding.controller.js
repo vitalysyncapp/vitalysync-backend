@@ -9,6 +9,7 @@ import {
   updateUserBurnoutBaseline,
   updateUserWellnessProfile
 } from '../services/onboarding.service.js';
+import { recordProductEventSafely } from '../services/productEventService.js';
 
 const allowedActivityLevels = new Set([
   'Sedentary',
@@ -312,6 +313,13 @@ export async function updateBurnoutBaseline(req, res) {
   try {
     const userId = getAuthenticatedUserId(req) ?? req.params.userId;
     const payload = await updateUserBurnoutBaseline(userId, req.body);
+    await recordProductEventSafely(pool, userId, {
+      eventName: 'baseline_refresh_completed',
+      eventKey: payload.client_refresh_id ?? `epoch:${payload.baseline_epoch_id}`,
+      dimensions: {
+        reason: payload.baseline_refresh_reason ?? 'manual_baseline_refresh'
+      }
+    });
     return res.status(200).json(payload);
   } catch (error) {
     if (error instanceof OnboardingServiceError) {

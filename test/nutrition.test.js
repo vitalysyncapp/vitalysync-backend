@@ -17,7 +17,9 @@ import {
   readNutritionTimeoutConfig,
 } from '../src/services/nutrition.service.js';
 import {
+  buildCuratedNutritionVariants,
   buildDeterministicNutritionAssistantNudge,
+  buildNutritionAiContext,
   buildNutritionAssistantNudgeCandidates,
   buildNutritionAssistantNudgeResponse,
   getNutritionAssistantNudge,
@@ -434,29 +436,95 @@ test('nutrition assistant nudge falls back when AI enhancement fails', async () 
 
   assert.equal(insight.metadata.macro_focus, 'protein');
   assert.equal(insight.metadata.ai_fallback, true);
+  assert.equal(insight.metadata.ai_error, 'curated_selection_unavailable');
+  assert.doesNotMatch(JSON.stringify(insight.metadata), /model unavailable/);
 });
 
-test('nutrition assistant rejects AI changes to focus or foods', async () => {
+test('nutrition AI context contains curated copy and no raw meal data', () => {
+  const deterministic = buildDeterministicNutritionAssistantNudge({
+    summary: summary({ protein: 5, carbs: 45, fat: 15 }),
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+  const context = buildNutritionAiContext(deterministic);
+  const serialized = JSON.stringify(context);
+
+  assert.deepEqual(Object.keys(context).sort(), [
+    'available_variants',
+    'deterministic_message',
+    'deterministic_title',
+    'macro_focus',
+    'recommended_foods',
+  ]);
+  assert.equal(context.available_variants.length, 3);
+  assert.doesNotMatch(
+    serialized,
+    /"(meals|items|notes|user_id|nutrition_log_id|created_at|updated_at|total_calories)"\s*:/i
+  );
+});
+
+test('curated nutrition variants stay short and preserve approved foods', () => {
+  const deterministic = buildDeterministicNutritionAssistantNudge({
+    summary: summary({ protein: 5, carbs: 45, fat: 15 }),
+    now: new Date('2026-05-22T12:00:00Z'),
+  });
+  const variants = buildCuratedNutritionVariants(deterministic);
+
+  assert.deepEqual(
+    variants.map((variant) => variant.variant_id),
+    ['direct', 'gentle', 'encouraging']
+  );
+  for (const variant of variants) {
+    assert.ok(variant.title.length <= 48);
+    assert.ok(variant.message.length <= 180);
+    assert.ok(variant.message.toLowerCase().includes(
+      deterministic.message.toLowerCase()
+    ));
+  }
+});
+
+test('nutrition assistant applies only a selected curated variant', async () => {
   const insight = await buildNutritionAssistantNudgeResponse({
     summary: summary({ protein: 5, carbs: 45, fat: 15 }),
     now: new Date('2026-05-22T12:00:00Z'),
     useAi: true,
-    aiEnhancer: async (deterministic) => ({
-      ...deterministic,
-      message: 'Try salmon with your next meal.',
-      metadata: {
-        ...deterministic.metadata,
-        macro_focus: 'healthy_fats',
-        recommended_foods: ['salmon'],
-        ai_enhanced: true,
-      },
+    aiEnhancer: async () => ({
+      variant_id: 'encouraging',
+      message: 'Try tempeh with your next meal.',
     }),
   });
 
   assert.equal(insight.metadata.macro_focus, 'protein');
+  assert.equal(insight.metadata.ai_enhanced, true);
+  assert.equal(insight.metadata.ai_variant_id, 'encouraging');
+  assert.match(insight.message, /^One easy next step:/);
+  assert.doesNotMatch(insight.message, /tempeh/i);
+});
+
+test('nutrition AI enhancer receives no raw nutrition summary argument', async () => {
+  let receivedArguments = [];
+  await buildNutritionAssistantNudgeResponse({
+    summary: summary({ protein: 5, carbs: 45, fat: 15 }),
+    useAi: true,
+    aiEnhancer: async (...args) => {
+      receivedArguments = args;
+      return { variant_id: 'direct' };
+    },
+  });
+
+  assert.equal(receivedArguments.length, 1);
+  assert.equal(receivedArguments[0].metadata.macro_focus, 'protein');
+});
+
+test('nutrition assistant rejects unknown curated variants', async () => {
+  const insight = await buildNutritionAssistantNudgeResponse({
+    summary: summary({ protein: 5, carbs: 45, fat: 15 }),
+    now: new Date('2026-05-22T12:00:00Z'),
+    useAi: true,
+    aiEnhancer: async () => ({ variant_id: 'invented-food-copy' }),
+  });
+
   assert.equal(insight.metadata.ai_enhanced, false);
   assert.equal(insight.metadata.ai_fallback, true);
-  assert.doesNotMatch(insight.message, /salmon/i);
 });
 
 test('nutrition assistant loads one bounded seven-day database window', async () => {

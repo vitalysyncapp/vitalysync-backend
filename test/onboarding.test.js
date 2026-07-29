@@ -10,6 +10,7 @@ import {
   updateUserBurnoutBaseline,
   updateUserWellnessProfile,
 } from '../src/services/onboarding.service.js';
+import { startBaselineEpoch } from '../src/services/baselineEpochService.js';
 import pool from '../src/config/db.js';
 
 const burnoutQuestionKeys = [
@@ -503,6 +504,49 @@ test('burnout baseline retake rejects an impossible local baseline date', async 
       error instanceof OnboardingServiceError &&
       error.message === 'Valid baseline_date is required'
   );
+});
+
+test('burnout baseline retake rejects invalid refresh identifiers', async () => {
+  await assert.rejects(
+    () => updateUserBurnoutBaseline(1, {
+      burnout_answers: baselineAnswers(),
+      client_refresh_id: 'bad id'
+    }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'Valid client_refresh_id is required'
+  );
+});
+
+test('baseline epoch creation reuses an existing client refresh', async () => {
+  const queries = [];
+  const client = {
+    async query(text, values) {
+      queries.push({ text, values });
+      return {
+        rowCount: 1,
+        rows: [{
+          baseline_epoch_id: 8,
+          user_id: 1,
+          started_at: '2026-07-28',
+          ended_at: null,
+          reset_reason: 'thirty_day_return',
+          client_refresh_id: 'refresh_20260728_abc'
+        }]
+      };
+    }
+  };
+
+  const epoch = await startBaselineEpoch(client, 1, {
+    startedAt: '2026-07-28',
+    resetReason: 'thirty_day_return',
+    clientRefreshId: 'refresh_20260728_abc'
+  });
+
+  assert.equal(epoch.baselineEpochId, 8);
+  assert.equal(epoch.clientRefreshId, 'refresh_20260728_abc');
+  assert.equal(queries.length, 1);
+  assert.match(queries[0].text, /client_refresh_id = \$2/);
 });
 
 test('burnout baseline retake rejects users without onboarding profiles', async () => {

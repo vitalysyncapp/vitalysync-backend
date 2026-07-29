@@ -4,8 +4,13 @@ import { calculateTotals, toNumber } from './nutrition.service.js';
 import { analyzeNutritionMealPatterns } from './nutritionPatternService.js';
 
 const DEFAULT_OPENAI_NUTRITION_NUDGE_MODEL = 'gpt-4o-mini';
-const PROMPT_VERSION = 'nutrition_assistant_nudge_v2';
+const PROMPT_VERSION = 'nutrition_assistant_nudge_v3_curated';
 const NUTRITION_FEEDBACK_COOLDOWN_HOURS = 48;
+const CURATED_NUTRITION_VARIANT_IDS = [
+  'direct',
+  'gentle',
+  'encouraging'
+];
 
 const FOOD_GROUPS = {
   protein: ['eggs', 'chicken', 'tuna or fish', 'tofu', 'beans', 'Greek yogurt'],
@@ -17,31 +22,17 @@ const FOOD_GROUPS = {
 const NUTRITION_NUDGE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['title', 'message', 'macro_focus', 'recommended_foods'],
+  required: ['variant_id'],
   properties: {
-    title: { type: 'string' },
-    message: { type: 'string' },
-    macro_focus: { type: 'string' },
-    recommended_foods: {
-      type: 'array',
-      items: { type: 'string' }
+    variant_id: {
+      type: 'string',
+      enum: CURATED_NUTRITION_VARIANT_IDS
     }
   }
 };
 
 const UNSAFE_NUTRITION_COPY_PATTERN =
   /\b(calorie|kcal|diet|weight|goal|target|lose|treat|treatment|diagnos|disease|medical|prescri|cure|prevent|cholesterol|immunity|metabolism|blood sugar)\b/i;
-const FOOD_TERMS = [
-  ...new Set([
-    ...Object.values(FOOD_GROUPS).flat(),
-    'salmon',
-    'quinoa',
-    'beef',
-    'pork',
-    'milk',
-    'cheese'
-  ])
-];
 
 let openaiClient = null;
 
@@ -569,103 +560,92 @@ function parseJsonResponse(response) {
   return JSON.parse(outputText);
 }
 
-function normalizeAiOutput(payload) {
-  const title = truncate(payload?.title, 48);
-  const message = truncate(payload?.message, 220);
-  const macroFocus = safeString(payload?.macro_focus);
-  const recommendedFoods = Array.isArray(payload?.recommended_foods)
-    ? payload.recommended_foods.map((food) => safeString(food)).filter(Boolean)
-    : [];
-
-  if (!title || !message || !macroFocus) {
-    return null;
-  }
-
-  return { title, message, macroFocus, recommendedFoods };
+function lowerFirst(value) {
+  const normalized = safeString(value);
+  if (!normalized) return normalized;
+  return `${normalized[0].toLowerCase()}${normalized.slice(1)}`;
 }
 
-function normalizedList(values) {
-  return values.map((value) => safeString(value).toLowerCase()).sort();
+function prefixedMessage(prefix, message) {
+  const combined = `${prefix}${lowerFirst(message)}`;
+  return combined.length <= 180 ? combined : message;
 }
 
-function sameList(left, right) {
-  return (
-    JSON.stringify(normalizedList(left)) ===
-    JSON.stringify(normalizedList(right))
+export function buildCuratedNutritionVariants(insight) {
+  const isPositive = insight?.metadata?.macro_focus === 'balanced_plate';
+  const direct = {
+    variant_id: 'direct',
+    title: truncate(insight?.title, 48),
+    message: truncate(insight?.message, 180)
+  };
+  const gentle = {
+    variant_id: 'gentle',
+    title: direct.title,
+    message: prefixedMessage(
+      isPositive ? 'A steady choice: ' : 'A gentle option: ',
+      direct.message
+    )
+  };
+  const encouraging = {
+    variant_id: 'encouraging',
+    title: direct.title,
+    message: prefixedMessage(
+      isPositive ? 'Nice work - ' : 'One easy next step: ',
+      direct.message
+    )
+  };
+
+  return [direct, gentle, encouraging].filter(
+    (variant) =>
+      variant.title &&
+      variant.message &&
+      variant.title.length <= 48 &&
+      variant.message.length <= 180 &&
+      !UNSAFE_NUTRITION_COPY_PATTERN.test(
+        `${variant.title} ${variant.message}`
+      )
   );
 }
 
-function mentionsUnapprovedFood(
-  message,
-  recommendedFoods,
-  deterministicMessage
-) {
-  const normalizedMessage = message.toLowerCase();
-  const allowedText =
-    `${recommendedFoods.join(' ')} ${deterministicMessage}`.toLowerCase();
-
-  return FOOD_TERMS.some((food) => {
-    const normalizedFood = food.toLowerCase();
-    return (
-      normalizedMessage.includes(normalizedFood) &&
-      !allowedText.includes(normalizedFood)
-    );
-  });
+export function buildNutritionAiContext(insight) {
+  return {
+    deterministic_title: insight.title,
+    deterministic_message: insight.message,
+    macro_focus: insight.metadata.macro_focus,
+    recommended_foods: insight.metadata.recommended_foods ?? [],
+    available_variants: buildCuratedNutritionVariants(insight)
+  };
 }
 
-function safeEnhancedNudge(deterministic, enhanced) {
-  if (!enhanced || typeof enhanced !== 'object') {
-    return null;
-  }
-
-  const title = truncate(enhanced.title, 48);
-  const message = truncate(enhanced.message, 220);
-  const enhancedMetadata = normalizeMetadata(enhanced.metadata);
-  const macroFocus = safeString(
-    enhanced.macro_focus ?? enhancedMetadata.macro_focus,
-    deterministic.metadata.macro_focus
+function resolveCuratedNutritionSelection(deterministic, selection) {
+  const variantId = safeString(selection?.variant_id);
+  const variant = buildCuratedNutritionVariants(deterministic).find(
+    (candidate) => candidate.variant_id === variantId
   );
-  const recommendedFoods =
-    enhanced.recommended_foods ?? enhancedMetadata.recommended_foods;
-  const deterministicFoods = deterministic.metadata.recommended_foods ?? [];
-
-  if (
-    !title ||
-    !message ||
-    macroFocus !== deterministic.metadata.macro_focus ||
-    (recommendedFoods != null &&
-      (!Array.isArray(recommendedFoods) ||
-        !sameList(recommendedFoods, deterministicFoods))) ||
-    UNSAFE_NUTRITION_COPY_PATTERN.test(`${title} ${message}`) ||
-    mentionsUnapprovedFood(message, deterministicFoods, deterministic.message)
-  ) {
-    return null;
-  }
+  if (!variant) return null;
 
   return {
     ...deterministic,
-    title,
-    message,
+    title: variant.title,
+    message: variant.message,
     metadata: {
       ...deterministic.metadata,
-      ai_enhanced: enhancedMetadata.ai_enhanced === true,
-      ...(enhancedMetadata.ai_model
-        ? { ai_model: enhancedMetadata.ai_model }
-        : {}),
-      ...(enhancedMetadata.ai_prompt_version
-        ? { ai_prompt_version: enhancedMetadata.ai_prompt_version }
+      ai_enhanced: true,
+      ai_variant_id: variant.variant_id,
+      ...(selection?.ai_model ? { ai_model: selection.ai_model } : {}),
+      ...(selection?.ai_prompt_version
+        ? { ai_prompt_version: selection.ai_prompt_version }
         : {})
     }
   };
 }
 
-export async function enhanceNutritionAssistantNudge(insight, { summary }) {
+export async function enhanceNutritionAssistantNudge(insight) {
   const model =
     process.env.OPENAI_NUTRITION_NUDGE_MODEL ||
     process.env.OPENAI_NUTRITION_MODEL ||
     DEFAULT_OPENAI_NUTRITION_NUDGE_MODEL;
-  const macroFocus = insight.metadata.macro_focus;
-  const recommendedFoods = insight.metadata.recommended_foods ?? [];
+  const context = buildNutritionAiContext(insight);
   const openai = getOpenAIClient();
   const response = await openai.responses.create({
     model,
@@ -676,7 +656,7 @@ export async function enhanceNutritionAssistantNudge(insight, { summary }) {
           {
             type: 'input_text',
             text:
-              'You polish short nutrition nudges for VitalySync. Keep advice general, practical, and non-medical. Do not prescribe calories, dieting rules, weight loss, or diagnosis. Return the exact macro_focus and recommended_foods values supplied. Do not add foods, meals, goals, or health claims. Use plain English.'
+              'You select one prewritten nutrition nudge variant for VitalySync. Do not rewrite, add, or remove any wording. Return only the exact variant_id of the option that sounds warmest and most natural for the supplied deterministic message.'
           }
         ]
       },
@@ -686,14 +666,8 @@ export async function enhanceNutritionAssistantNudge(insight, { summary }) {
           {
             type: 'input_text',
             text:
-              'Polish this deterministic nutrition nudge without changing the meaning or food list. Return JSON only.\n\nContext:\n' +
-              JSON.stringify({
-                deterministic_title: insight.title,
-                deterministic_message: insight.message,
-                macro_focus: macroFocus,
-                recommended_foods: recommendedFoods,
-                totals: normalizeSummary(summary)
-              })
+              'Choose one available variant. Return JSON only.\n\nContext:\n' +
+              JSON.stringify(context)
           }
         ]
       }
@@ -708,31 +682,10 @@ export async function enhanceNutritionAssistantNudge(insight, { summary }) {
     }
   });
   const parsed = parseJsonResponse(response);
-  const normalized = normalizeAiOutput(parsed);
-
-  if (!normalized) {
-    return insight;
-  }
-
-  if (
-    normalized.macroFocus !== macroFocus ||
-    !sameList(normalized.recommendedFoods, recommendedFoods)
-  ) {
-    throw new Error('AI nutrition nudge changed the deterministic decision');
-  }
-
   return {
-    ...insight,
-    title: normalized.title,
-    message: normalized.message,
-    metadata: {
-      ...insight.metadata,
-      ai_enhanced: true,
-      ai_model: model,
-      ai_prompt_version: PROMPT_VERSION,
-      deterministic_title: insight.metadata.deterministic_title ?? insight.title,
-      deterministic_message: insight.metadata.deterministic_message ?? insight.message
-    }
+    variant_id: safeString(parsed?.variant_id),
+    ai_model: model,
+    ai_prompt_version: PROMPT_VERSION
   };
 }
 
@@ -756,8 +709,8 @@ export async function buildNutritionAssistantNudgeResponse({
   }
 
   try {
-    const enhanced = await aiEnhancer(deterministic, { summary });
-    const safe = safeEnhancedNudge(deterministic, enhanced);
+    const selection = await aiEnhancer(deterministic);
+    const safe = resolveCuratedNutritionSelection(deterministic, selection);
     if (safe) {
       return safe;
     }
@@ -770,7 +723,7 @@ export async function buildNutritionAssistantNudgeResponse({
         ...deterministic.metadata,
         ai_enhanced: false,
         ai_fallback: true,
-        ai_error: error.message
+        ai_error: 'curated_selection_unavailable'
       }
     };
   }

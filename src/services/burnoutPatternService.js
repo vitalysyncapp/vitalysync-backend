@@ -701,5 +701,26 @@ export async function getBurnoutPatternSummary(
   }
 
   const scores = await loadScoresForPattern(client, userId, normalizedEndDate);
-  return analyzeBurnoutPatterns(scores, normalizedEndDate);
+  const epochResult = await client.query(
+    `SELECT baseline_epoch_id, started_at, reset_reason
+     FROM user_baseline_epochs
+     WHERE user_id = $1
+       AND started_at::DATE <= $2
+       AND (ended_at IS NULL OR ended_at::DATE >= $2)
+     ORDER BY started_at DESC, baseline_epoch_id DESC
+     LIMIT 1`,
+    [userId, normalizedEndDate]
+  );
+  const epoch = epochResult.rows[0];
+
+  return {
+    ...analyzeBurnoutPatterns(scores, normalizedEndDate),
+    baseline_epoch: epoch
+      ? {
+          id: Number(epoch.baseline_epoch_id),
+          started_at: formatDateOnly(epoch.started_at),
+          reset_reason: epoch.reset_reason
+        }
+      : null
+  };
 }

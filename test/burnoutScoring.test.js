@@ -7,7 +7,10 @@ import {
   calculateDailyBurnoutSnapshot,
   getWeekStartDate,
 } from '../src/services/burnoutScoringEngine.js';
-import { analyzeBurnoutPatterns } from '../src/services/burnoutPatternService.js';
+import {
+  analyzeBurnoutPatterns,
+  getBurnoutPatternSummary
+} from '../src/services/burnoutPatternService.js';
 import {
   calculateBaselinePolicy,
   detectReturnState
@@ -628,6 +631,35 @@ test('pattern summaries keep the latest baseline epoch isolated', () => {
   assert.equal(summary.baseline_epoch_id, 2);
   assert.equal(summary.windows['28_day'].available_days, 1);
   assert.equal(summary.windows['28_day'].average_score, 30);
+});
+
+test('pattern summary exposes the active epoch reset marker', async () => {
+  const client = {
+    async query(text) {
+      if (text.includes('FROM burnout_score_history')) return { rows: [] };
+      if (text.includes('FROM user_baseline_epochs')) {
+        return {
+          rows: [{
+            baseline_epoch_id: 18,
+            started_at: '2026-07-28',
+            reset_reason: 'thirty_day_return'
+          }]
+        };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    }
+  };
+
+  const summary = await getBurnoutPatternSummary(client, 3, {
+    endDate: '2026-07-29',
+    refreshScores: false
+  });
+
+  assert.deepEqual(summary.baseline_epoch, {
+    id: 18,
+    started_at: '2026-07-28',
+    reset_reason: 'thirty_day_return'
+  });
 });
 
 test('seven-day rising evidence triggers an adaptive recommendation pattern', () => {

@@ -1,5 +1,6 @@
 import pool from '../config/db.js';
 import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
+import { recordProductEventSafely } from '../services/productEventService.js';
 
 const DEFAULT_RECOMMENDED_BY = 'vitalysync_assistant';
 const DEFAULT_SOURCE = 'assistant';
@@ -308,6 +309,17 @@ export async function chooseExerciseGoal(req, res) {
     await updateDailyLogExerciseFields(client, userId, payload.logDate, payload);
     await client.query('COMMIT');
 
+    await recordProductEventSafely(pool, userId, {
+      eventName: 'exercise_recommendation_selected',
+      eventKey: payload.logDate,
+      dimensions: {
+        recommendation_key: payload.exerciseName,
+        exercise_category: payload.exerciseCategory,
+        is_none_today: payload.status === 'none',
+        source: payload.recommendedBy
+      }
+    });
+
     return res.status(200).json({
       message:
         payload.status === 'none'
@@ -374,6 +386,18 @@ export async function updateExerciseGoalProgress(req, res) {
     }
 
     await client.query('COMMIT');
+
+    if (shouldComplete) {
+      await recordProductEventSafely(pool, userId, {
+        eventName: 'exercise_goal_completed',
+        eventKey: `goal:${updatedGoal.goal_id}`,
+        dimensions: {
+          recommendation_key: updatedGoal.exercise_name,
+          exercise_category: updatedGoal.exercise_category,
+          source: updatedGoal.recommended_by
+        }
+      });
+    }
 
     return res.status(200).json({
       message: shouldComplete
@@ -447,6 +471,18 @@ async function updateExerciseGoalStatus(req, res, status) {
     });
 
     await client.query('COMMIT');
+
+    if (status === 'completed') {
+      await recordProductEventSafely(pool, userId, {
+        eventName: 'exercise_goal_completed',
+        eventKey: `goal:${goal.goal_id}`,
+        dimensions: {
+          recommendation_key: goal.exercise_name,
+          exercise_category: goal.exercise_category,
+          source: goal.recommended_by
+        }
+      });
+    }
 
     return res.status(200).json({
       message:

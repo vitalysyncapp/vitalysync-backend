@@ -7,7 +7,8 @@ function formatEpoch(row) {
     userId: Number(row.user_id),
     startedAt: formatDateOnly(row.started_at),
     endedAt: row.ended_at ? formatDateOnly(row.ended_at) : null,
-    resetReason: row.reset_reason ?? null
+    resetReason: row.reset_reason ?? null,
+    clientRefreshId: row.client_refresh_id ?? null
   };
 }
 
@@ -22,7 +23,8 @@ export async function ensureBaselineEpochForDate(
        user_id,
        started_at,
        ended_at,
-       reset_reason
+       reset_reason,
+       client_refresh_id
      FROM user_baseline_epochs
      WHERE user_id = $1
        AND started_at::DATE <= $2
@@ -54,7 +56,8 @@ export async function ensureBaselineEpochForDate(
        user_id,
        started_at,
        ended_at,
-       reset_reason`,
+       reset_reason,
+       client_refresh_id`,
     [userId, formatDateOnly(scoreDate)]
   );
 
@@ -68,7 +71,8 @@ export async function ensureBaselineEpochForDate(
        user_id,
        started_at,
        ended_at,
-       reset_reason
+       reset_reason,
+       client_refresh_id
      FROM user_baseline_epochs
      WHERE user_id = $1
      ORDER BY started_at DESC, baseline_epoch_id DESC
@@ -82,16 +86,37 @@ export async function ensureBaselineEpochForDate(
 export async function startBaselineEpoch(
   client,
   userId,
-  { startedAt, resetReason }
+  { startedAt, resetReason, clientRefreshId = null }
 ) {
   const normalizedStart = formatDateOnly(startedAt);
+  if (clientRefreshId) {
+    const replayResult = await client.query(
+      `SELECT
+         baseline_epoch_id,
+         user_id,
+         started_at,
+         ended_at,
+         reset_reason,
+         client_refresh_id
+       FROM user_baseline_epochs
+       WHERE user_id = $1 AND client_refresh_id = $2
+       LIMIT 1
+       FOR UPDATE`,
+      [userId, clientRefreshId]
+    );
+    if (replayResult.rowCount > 0) {
+      return formatEpoch(replayResult.rows[0]);
+    }
+  }
+
   const activeResult = await client.query(
     `SELECT
        baseline_epoch_id,
        user_id,
        started_at,
        ended_at,
-       reset_reason
+       reset_reason,
+       client_refresh_id
      FROM user_baseline_epochs
      WHERE user_id = $1 AND ended_at IS NULL
      ORDER BY started_at DESC, baseline_epoch_id DESC
@@ -109,6 +134,7 @@ export async function startBaselineEpoch(
     const updated = await client.query(
       `UPDATE user_baseline_epochs
        SET reset_reason = $2,
+           client_refresh_id = COALESCE(client_refresh_id, $3),
            updated_at = NOW()
        WHERE baseline_epoch_id = $1
        RETURNING
@@ -116,8 +142,9 @@ export async function startBaselineEpoch(
          user_id,
          started_at,
          ended_at,
-         reset_reason`,
-      [activeEpoch.baseline_epoch_id, effectiveResetReason]
+         reset_reason,
+         client_refresh_id`,
+      [activeEpoch.baseline_epoch_id, effectiveResetReason, clientRefreshId]
     );
     return formatEpoch(updated.rows[0]);
   }
@@ -134,16 +161,18 @@ export async function startBaselineEpoch(
     `INSERT INTO user_baseline_epochs (
        user_id,
        started_at,
-       reset_reason
+       reset_reason,
+       client_refresh_id
      )
-     VALUES ($1, $2::DATE::TIMESTAMPTZ, $3)
+     VALUES ($1, $2::DATE::TIMESTAMPTZ, $3, $4)
      RETURNING
        baseline_epoch_id,
        user_id,
        started_at,
        ended_at,
-       reset_reason`,
-    [userId, normalizedStart, resetReason]
+       reset_reason,
+       client_refresh_id`,
+    [userId, normalizedStart, resetReason, clientRefreshId]
   );
 
   return formatEpoch(result.rows[0]);
