@@ -66,6 +66,9 @@ export function createAccessToken(user) {
   };
   const payload = {
     sub: Number(user.user_id),
+    ver: Number.isInteger(Number(user.auth_token_version))
+      ? Number(user.auth_token_version)
+      : 0,
     iat: now,
     exp: now + expiresIn
   };
@@ -110,6 +113,14 @@ export function verifyAccessToken(token) {
 
   if (!Number.isInteger(payload.sub) || payload.sub <= 0) {
     throw new Error('Invalid access token subject');
+  }
+
+  if (payload.ver == null) {
+    payload.ver = 0;
+  }
+
+  if (!Number.isInteger(payload.ver) || payload.ver < 0) {
+    throw new Error('Invalid access token version');
   }
 
   if (!Number.isInteger(payload.exp) || payload.exp <= now) {

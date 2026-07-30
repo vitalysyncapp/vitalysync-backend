@@ -6,14 +6,15 @@ import bcrypt from 'bcrypt';
 
 import pool from '../src/config/db.js';
 import {
+  changePassword,
   confirmPasswordReset,
   confirmEmailVerification,
   login,
   requestPasswordReset,
   resendEmailVerification,
-  showPasswordResetForm,
   signup,
   updateProfile,
+  verifyPasswordResetCode,
 } from '../src/controllers/auth.controller.js';
 import {
   createAccessToken,
@@ -29,6 +30,16 @@ function dnsError(code) {
   return error;
 }
 
+async function waitFor(predicate, timeoutMs = 1500) {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error('Timed out waiting for asynchronous mail work');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 test('auth tokens round-trip signed user identity', () => {
   const token = createAccessToken({
     user_id: 42,
@@ -39,6 +50,7 @@ test('auth tokens round-trip signed user identity', () => {
   const payload = verifyAccessToken(token.access_token);
 
   assert.equal(payload.sub, 42);
+  assert.equal(payload.ver, 0);
   assert.equal(payload.email, undefined);
   assert.equal(payload.username, undefined);
   assert.equal(typeof payload.iat, 'number');
@@ -224,6 +236,14 @@ test('profile email changes reset verification and queue a new email', async (t)
 
   const res = createMockResponse();
   const originalQuery = pool.query;
+  const originalConnect = pool.connect;
+
+  pool.connect = async () => ({
+    async query() {
+      return { rows: [] };
+    },
+    release() {},
+  });
 
   pool.query = async (sql, params) => {
     if (sql.includes('information_schema.columns')) {
@@ -313,13 +333,14 @@ test('profile email changes reset verification and queue a new email', async (t)
       },
       res,
     );
-    await new Promise((resolve) => setImmediate(resolve));
+    await waitFor(() => sentMail != null);
 
     assert.equal(res.statusCode, 200);
     assert.equal(res.body.user.email_verified, false);
     assert.equal(sentMail.to, 'new@example.com');
   } finally {
     pool.query = originalQuery;
+    pool.connect = originalConnect;
   }
 });
 
@@ -413,111 +434,78 @@ test('login allows unverified email accounts and exposes verification state', as
   }
 });
 
-test('email verification confirm consumes a token and returns JSON success', async () => {
+test('email verification confirm consumes a code and returns JSON success', async () => {
   const res = createMockResponse();
-  const originalQuery = pool.query;
-  const token = 'raw-token';
+  const code = '123456';
+  const codeHash = await bcrypt.hash(code, 4);
+  const originalConnect = pool.connect;
 
-  pool.query = async (sql, params) => {
-    if (sql.includes('UPDATE auth_email_tokens')) {
-      assert.equal(params[0], hashEmailToken(token));
-      return {
-        rows: [{ user_id: 7, email: 'student@example.com' }],
-      };
-    }
-
-    if (sql.includes('UPDATE users')) {
-      return {
-        rows: [
-          {
+  pool.connect = async () => ({
+    async query(sql) {
+      if (sql.includes('SELECT token_id')) {
+        return {
+          rows: [{
+            token_id: 11,
+            user_id: 7,
+            email: 'student@example.com',
+            code_hash: codeHash,
+          }],
+        };
+      }
+      if (sql.includes('UPDATE users')) {
+        return {
+          rows: [{
             user_id: 7,
             email: 'student@example.com',
             email_verified: true,
             email_verified_at: new Date(),
-          },
-        ],
-      };
-    }
-
-    throw new Error(`Unexpected query: ${sql}`);
-  };
+          }],
+        };
+      }
+      return { rows: [] };
+    },
+    release() {},
+  });
 
   try {
     await confirmEmailVerification(
-      {
-        query: { token },
-        accepts: () => 'json',
-      },
+      { auth: { sub: 7 }, body: { code } },
       res,
     );
 
     assert.equal(res.statusCode, 200);
-    assert.equal(res.body.message, 'Email verified successfully. You can return to VitalySync.');
+    assert.equal(res.body.message, 'Email verified successfully.');
+    assert.equal(res.body.email_verified, true);
   } finally {
-    pool.query = originalQuery;
+    pool.connect = originalConnect;
   }
 });
 
-test('email verification confirm rejects used or expired tokens', async () => {
+test('email verification confirm rejects malformed codes', async () => {
   const res = createMockResponse();
-  const originalQuery = pool.query;
+  const originalConnect = pool.connect;
 
-  pool.query = async (sql) => {
-    assert.match(sql, /UPDATE auth_email_tokens/);
-    return { rows: [] };
-  };
+  pool.connect = async () => ({
+    async query() {
+      return { rows: [] };
+    },
+    release() {},
+  });
 
   try {
     await confirmEmailVerification(
-      {
-        query: { token: 'used-token' },
-        accepts: () => 'json',
-      },
+      { auth: { sub: 7 }, body: { code: '12x' } },
       res,
     );
 
     assert.equal(res.statusCode, 400);
-    assert.equal(res.body.message, 'Invalid or expired verification link');
+    assert.equal(res.body.message, 'Invalid or expired verification code');
   } finally {
-    pool.query = originalQuery;
+    pool.connect = originalConnect;
   }
 });
 
-test('resend email verification returns a generic response for missing users', async () => {
-  const res = createMockResponse();
-  const originalQuery = pool.query;
-
-  pool.query = async (sql, params) => {
-    if (sql.includes('information_schema.columns')) {
-      return {
-        rows: [
-          {
-            has_email_verified: true,
-            has_auth_email_tokens: true,
-          },
-        ],
-      };
-    }
-
-    if (sql.includes('FROM users')) {
-      assert.equal(params[0], 'missing@example.com');
-      return { rows: [] };
-    }
-
-    throw new Error(`Unexpected query: ${sql}`);
-  };
-
-  try {
-    await resendEmailVerification({ body: { email: 'missing@example.com' } }, res);
-
-    assert.equal(res.statusCode, 200);
-    assert.match(res.body.message, /verification link has been sent/);
-  } finally {
-    pool.query = originalQuery;
-  }
-});
-
-test('resend email verification queues mail for unverified accounts', async (t) => {
+test('resend email verification queues a six-digit code for the authenticated user', async (t) => {
   let sentMail = null;
   t.mock.method(mailService, 'sendVerificationEmail', async (message) => {
     sentMail = message;
@@ -526,83 +514,63 @@ test('resend email verification queues mail for unverified accounts', async (t) 
 
   const res = createMockResponse();
   const originalQuery = pool.query;
+  const originalConnect = pool.connect;
 
   pool.query = async (sql, params) => {
     if (sql.includes('information_schema.columns')) {
       return {
-        rows: [
-          {
-            has_email_verified: true,
-            has_auth_email_tokens: true,
-          },
-        ],
+        rows: [{
+          has_email_verified: true,
+          has_auth_email_tokens: true,
+        }],
       };
     }
-
     if (sql.includes('FROM users')) {
-      assert.equal(params[0], 'student@example.com');
+      assert.equal(params[0], 7);
       return {
-        rows: [
-          {
-            user_id: 7,
-            username: 'Student',
-            email: 'student@example.com',
-            email_verified: false,
-          },
-        ],
+        rows: [{
+          user_id: 7,
+          username: 'Student',
+          email: 'student@example.com',
+          email_verified: false,
+        }],
       };
     }
-
-    if (sql.includes('UPDATE auth_email_tokens')) {
-      return { rows: [] };
-    }
-
-    if (sql.includes('INSERT INTO auth_email_tokens')) {
-      return { rows: [] };
-    }
-
     throw new Error(`Unexpected query: ${sql}`);
   };
+  pool.connect = async () => ({
+    async query() {
+      return { rows: [] };
+    },
+    release() {},
+  });
 
   try {
-    await resendEmailVerification(
-      {
-        body: { email: 'Student@Example.com' },
-        protocol: 'https',
-        get: () => 'api.vitalysync.test',
-      },
-      res,
-    );
-    await new Promise((resolve) => setImmediate(resolve));
+    await resendEmailVerification({ auth: { sub: 7 }, body: {} }, res);
+    await waitFor(() => sentMail != null);
 
     assert.equal(res.statusCode, 200);
     assert.equal(sentMail.to, 'student@example.com');
-    assert.match(sentMail.verificationUrl, /^https:\/\/api\.vitalysync\.test\/api\/auth\/email-verification\/confirm\?token=/);
+    assert.match(sentMail.verificationCode, /^\d{6}$/);
+    assert.equal('verificationUrl' in sentMail, false);
   } finally {
     pool.query = originalQuery;
+    pool.connect = originalConnect;
   }
 });
 
-test('password reset request returns a generic response for missing users', async () => {
+test('password reset request returns a generic code response for missing users', async () => {
   const res = createMockResponse();
   const originalQuery = pool.query;
 
   pool.query = async (sql, params) => {
     if (sql.includes('information_schema.columns')) {
-      return {
-        rows: [
-          {
-            has_auth_email_tokens: true,
-          },
-        ],
-      };
+      return { rows: [{ has_auth_email_tokens: true }] };
     }
-
     if (sql.includes('FROM users')) {
       assert.equal(params[0], 'missing@example.com');
       return { rows: [] };
     }
-
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -610,13 +578,13 @@ test('password reset request returns a generic response for missing users', asyn
     await requestPasswordReset({ body: { email: 'missing@example.com' } }, res);
 
     assert.equal(res.statusCode, 200);
-    assert.match(res.body.message, /password reset link has been sent/);
+    assert.match(res.body.message, /password reset code has been sent/);
   } finally {
     pool.query = originalQuery;
   }
 });
 
-test('password reset request queues mail for existing accounts', async (t) => {
+test('password reset request sends a code instead of a link', async (t) => {
   let sentMail = null;
   t.mock.method(mailService, 'sendPasswordResetEmail', async (message) => {
     sentMail = message;
@@ -625,159 +593,159 @@ test('password reset request queues mail for existing accounts', async (t) => {
 
   const res = createMockResponse();
   const originalQuery = pool.query;
+  const originalConnect = pool.connect;
 
   pool.query = async (sql, params) => {
     if (sql.includes('information_schema.columns')) {
-      return {
-        rows: [
-          {
-            has_auth_email_tokens: true,
-          },
-        ],
-      };
+      return { rows: [{ has_auth_email_tokens: true }] };
     }
-
     if (sql.includes('FROM users')) {
       assert.equal(params[0], 'student@example.com');
       return {
-        rows: [
-          {
+        rows: [{ user_id: 7, username: 'Student', email: 'student@example.com' }],
+      };
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+  pool.connect = async () => ({
+    async query() {
+      return { rows: [] };
+    },
+    release() {},
+  });
+
+  try {
+    await requestPasswordReset({ body: { email: 'Student@Example.com' } }, res);
+    await waitFor(() => sentMail != null);
+
+    assert.equal(res.statusCode, 200);
+    assert.match(sentMail.resetCode, /^\d{6}$/);
+    assert.equal('passwordResetUrl' in sentMail, false);
+  } finally {
+    pool.query = originalQuery;
+    pool.connect = originalConnect;
+  }
+});
+
+test('password reset code exchange returns an opaque reset grant', async () => {
+  const res = createMockResponse();
+  const code = '234567';
+  const codeHash = await bcrypt.hash(code, 4);
+  const originalConnect = pool.connect;
+
+  pool.connect = async () => ({
+    async query(sql) {
+      if (sql.includes('SELECT token_id')) {
+        return {
+          rows: [{
+            token_id: 22,
             user_id: 7,
-            username: 'Student',
             email: 'student@example.com',
-          },
-        ],
-      };
-    }
-
-    if (sql.includes('UPDATE auth_email_tokens')) {
+            code_hash: codeHash,
+          }],
+        };
+      }
       return { rows: [] };
-    }
-
-    if (sql.includes('INSERT INTO auth_email_tokens')) {
-      return { rows: [] };
-    }
-
-    throw new Error(`Unexpected query: ${sql}`);
-  };
+    },
+    release() {},
+  });
 
   try {
-    await requestPasswordReset(
-      {
-        body: { email: 'Student@Example.com' },
-        protocol: 'https',
-        get: () => 'api.vitalysync.test',
-      },
+    await verifyPasswordResetCode(
+      { body: { email: 'student@example.com', code } },
       res,
     );
-    await new Promise((resolve) => setImmediate(resolve));
 
     assert.equal(res.statusCode, 200);
-    assert.equal(sentMail.to, 'student@example.com');
-    assert.match(sentMail.passwordResetUrl, /^https:\/\/api\.vitalysync\.test\/api\/auth\/password-reset\/confirm\?token=/);
+    assert.ok(res.body.reset_token.length > 20);
+    assert.notEqual(res.body.reset_token, code);
+    assert.ok(res.body.expires_at);
   } finally {
-    pool.query = originalQuery;
+    pool.connect = originalConnect;
   }
 });
 
-test('password reset form returns HTML for emailed links', async () => {
-  const res = {
-    statusCode: 200,
-    contentType: '',
-    body: '',
-    status(code) {
-      this.statusCode = code;
-      return this;
-    },
-    type(value) {
-      this.contentType = value;
-      return this;
-    },
-    send(payload) {
-      this.body = payload;
-      return this;
-    },
-    json(payload) {
-      this.body = payload;
-      return this;
-    },
-  };
-
-  await showPasswordResetForm({ query: { token: 'reset-token' }, accepts: () => 'html' }, res);
-
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.contentType, 'html');
-  assert.match(res.body, /Reset your password/);
-  assert.match(res.body, /name="token" value="reset-token"/);
-});
-
-test('password reset confirm consumes token and updates password', async () => {
+test('password reset confirmation updates the password and revokes sessions', async () => {
   const res = createMockResponse();
-  const originalQuery = pool.query;
+  const currentHash = await bcrypt.hash('old-secret', 4);
+  const originalConnect = pool.connect;
 
-  pool.query = async (sql, params) => {
-    if (sql.includes('UPDATE auth_email_tokens')) {
-      assert.equal(params[0], hashEmailToken('reset-token'));
-      assert.equal(params[1], 'password_reset');
-      return {
-        rows: [{ user_id: 7, email: 'student@example.com' }],
-      };
-    }
-
-    if (sql.includes('UPDATE users')) {
-      assert.equal(params[0], 7);
-      assert.equal(params[1], 'student@example.com');
-      assert.equal(await bcrypt.compare('newsecret', params[2]), true);
-      return {
-        rows: [{ user_id: 7, email: 'student@example.com' }],
-      };
-    }
-
-    throw new Error(`Unexpected query: ${sql}`);
-  };
+  pool.connect = async () => ({
+    async query(sql, params) {
+      if (sql.includes('FROM auth_email_tokens')) {
+        assert.equal(params[0], hashEmailToken('reset-grant'));
+        return {
+          rows: [{ token_id: 33, user_id: 7, email: 'student@example.com' }],
+        };
+      }
+      if (sql.includes('SELECT user_id, email, password')) {
+        return {
+          rows: [{ user_id: 7, email: 'student@example.com', password: currentHash }],
+        };
+      }
+      if (sql.includes('UPDATE users')) {
+        return {
+          rows: [{ user_id: 7, email: 'student@example.com', auth_token_version: 3 }],
+        };
+      }
+      return { rows: [] };
+    },
+    release() {},
+  });
 
   try {
     await confirmPasswordReset(
       {
-        body: { token: 'reset-token', password: 'newsecret' },
-        accepts: () => 'json',
+        body: {
+          reset_token: 'reset-grant',
+          new_password: 'new-secret',
+          confirm_password: 'new-secret',
+        },
       },
       res,
     );
 
     assert.equal(res.statusCode, 200);
-    assert.match(res.body.message, /Password reset successfully/);
+    assert.equal(res.body.sessions_revoked, true);
   } finally {
-    pool.query = originalQuery;
+    pool.connect = originalConnect;
   }
 });
 
-test('password reset confirm rejects used or expired tokens', async () => {
+test('authenticated password change validates and revokes all sessions', async () => {
   const res = createMockResponse();
-  const originalQuery = pool.query;
+  const currentHash = await bcrypt.hash('old-secret', 4);
+  const originalConnect = pool.connect;
 
-  pool.query = async (sql, params) => {
-    if (sql.includes('UPDATE auth_email_tokens')) {
-      assert.equal(params[0], hashEmailToken('expired-token'));
-      assert.equal(params[1], 'password_reset');
+  pool.connect = async () => ({
+    async query(sql) {
+      if (sql.includes('SELECT user_id, password')) {
+        return { rows: [{ user_id: 7, password: currentHash }] };
+      }
+      if (sql.includes('UPDATE users')) {
+        return { rows: [{ user_id: 7, auth_token_version: 4 }] };
+      }
       return { rows: [] };
-    }
-
-    throw new Error(`Unexpected query: ${sql}`);
-  };
+    },
+    release() {},
+  });
 
   try {
-    await confirmPasswordReset(
+    await changePassword(
       {
-        body: { token: 'expired-token', password: 'newsecret' },
-        accepts: () => 'json',
+        auth: { sub: 7 },
+        body: {
+          current_password: 'old-secret',
+          new_password: 'new-secret',
+          confirm_password: 'new-secret',
+        },
       },
       res,
     );
 
-    assert.equal(res.statusCode, 400);
-    assert.match(res.body.message, /Invalid or expired password reset link/);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.sessions_revoked, true);
   } finally {
-    pool.query = originalQuery;
+    pool.connect = originalConnect;
   }
 });

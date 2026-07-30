@@ -23,6 +23,7 @@ function createTestConfig(overrides = {}) {
     'signup',
     'emailVerification',
     'passwordReset',
+    'passwordChange',
     'nutritionAnalysis',
     'aiNudge',
     'reportRefresh',

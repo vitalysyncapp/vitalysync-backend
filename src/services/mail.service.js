@@ -69,9 +69,8 @@ async function sendMail(message) {
     }
 
     console.info('[dev mail]', {
-      to: message.to,
       subject: message.subject,
-      text: message.text,
+      preview: 'Configure Brevo SMTP to deliver this authentication email.',
     });
     return { accepted: [message.to], preview: 'console' };
   }
@@ -82,21 +81,29 @@ async function sendMail(message) {
   });
 }
 
-async function sendVerificationEmail({ to, username, verificationUrl }) {
+async function sendVerificationEmail({
+  to,
+  username,
+  verificationCode,
+  expiresInMinutes = 10,
+}) {
   const displayName = String(username ?? '').trim() || 'there';
   const subject = 'Verify your VitalySync email';
   const text = [
     `Hi ${displayName},`,
     '',
-    'Please verify your email address for VitalySync:',
-    verificationUrl,
+    'Enter this verification code in VitalySync:',
+    String(verificationCode),
+    '',
+    `This code expires in ${expiresInMinutes} minutes and can only be used once.`,
     '',
     'If you did not create or update a VitalySync account, you can ignore this email.',
   ].join('\n');
   const html = `
     <p>Hi ${escapeHtml(displayName)},</p>
-    <p>Please verify your email address for VitalySync.</p>
-    <p><a href="${escapeHtml(verificationUrl)}">Verify email</a></p>
+    <p>Enter this verification code in VitalySync:</p>
+    <p style="font-size: 30px; font-weight: 700; letter-spacing: 8px;">${escapeHtml(verificationCode)}</p>
+    <p>This code expires in ${escapeHtml(expiresInMinutes)} minutes and can only be used once.</p>
     <p>If you did not create or update a VitalySync account, you can ignore this email.</p>
   `;
 
@@ -108,23 +115,28 @@ async function sendVerificationEmail({ to, username, verificationUrl }) {
   });
 }
 
-async function sendPasswordResetEmail({ to, username, passwordResetUrl }) {
+async function sendPasswordResetEmail({
+  to,
+  username,
+  resetCode,
+  expiresInMinutes = 10,
+}) {
   const displayName = String(username ?? '').trim() || 'there';
   const subject = 'Reset your VitalySync password';
   const text = [
     `Hi ${displayName},`,
     '',
-    'Use this link to reset your VitalySync password:',
-    passwordResetUrl,
+    'Enter this password reset code in VitalySync:',
+    String(resetCode),
     '',
-    'This link expires soon and can only be used once.',
+    `This code expires in ${expiresInMinutes} minutes and can only be used once.`,
     'If you did not request a password reset, you can ignore this email.',
   ].join('\n');
   const html = `
     <p>Hi ${escapeHtml(displayName)},</p>
-    <p>Use this link to reset your VitalySync password.</p>
-    <p><a href="${escapeHtml(passwordResetUrl)}">Reset password</a></p>
-    <p>This link expires soon and can only be used once.</p>
+    <p>Enter this password reset code in VitalySync:</p>
+    <p style="font-size: 30px; font-weight: 700; letter-spacing: 8px;">${escapeHtml(resetCode)}</p>
+    <p>This code expires in ${escapeHtml(expiresInMinutes)} minutes and can only be used once.</p>
     <p>If you did not request a password reset, you can ignore this email.</p>
   `;
 

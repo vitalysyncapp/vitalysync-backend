@@ -11,8 +11,11 @@ import { createCorsOptions } from '../src/config/cors.config.js';
 import {
   enforceAuthenticatedUser,
   requireAuth,
+  validateTokenVersion,
 } from '../src/middleware/auth.middleware.js';
 import { createAccessToken } from '../src/services/authToken.service.js';
+
+app.locals.authTokenVersionLookup = async () => 0;
 
 async function withServer(serverApp, callback) {
   const server = http.createServer(serverApp);
@@ -35,8 +38,11 @@ async function withServer(serverApp, callback) {
   }
 }
 
-function bearerFor(userId) {
-  const token = createAccessToken({ user_id: userId });
+function bearerFor(userId, authTokenVersion = 0) {
+  const token = createAccessToken({
+    user_id: userId,
+    auth_token_version: authTokenVersion,
+  });
   return `Bearer ${token.access_token}`;
 }
 
@@ -107,6 +113,7 @@ test('production CORS supports explicit loopback port wildcards', async () => {
 
 test('authenticated middleware injects token user id when the client omits it', async () => {
   const authApp = express();
+  authApp.locals.authTokenVersionLookup = async () => 0;
   authApp.use(express.json());
   authApp.use(requireAuth, enforceAuthenticatedUser);
   authApp.all('/resource', (req, res) => res.status(200).json({
@@ -138,6 +145,37 @@ test('authenticated middleware injects token user id when the client omits it', 
       body_user_id: 12,
     });
   });
+});
+
+test('token-version checks accept legacy zero tokens and reject stale sessions', async () => {
+  assert.equal(
+    await validateTokenVersion(
+      { sub: 12 },
+      { lookup: async () => 0 },
+    ),
+    true,
+  );
+  assert.equal(
+    await validateTokenVersion(
+      { sub: 12, ver: 1 },
+      { lookup: async () => 2 },
+    ),
+    false,
+  );
+  assert.equal(
+    await validateTokenVersion(
+      { sub: 99, ver: 0 },
+      { db: { query: async () => ({ rows: [] }) } },
+    ),
+    false,
+  );
+  await assert.rejects(
+    validateTokenVersion(
+      { sub: 12, ver: 0 },
+      { db: { query: async () => { throw new Error('database unavailable'); } } },
+    ),
+    /database unavailable/,
+  );
 });
 
 test('authenticated API rejects missing, invalid, and mismatched users', async () => {

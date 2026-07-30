@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 
+import bcrypt from 'bcrypt';
+
 import pool from '../config/db.js';
 
 export const AUTH_EMAIL_TOKEN_TYPES = Object.freeze({
@@ -8,13 +10,16 @@ export const AUTH_EMAIL_TOKEN_TYPES = Object.freeze({
 });
 
 export const AUTH_EMAIL_TOKEN_MESSAGES = Object.freeze({
-  invalidVerificationToken: 'Invalid or expired verification link',
-  invalidPasswordResetToken: 'Invalid or expired password reset link',
+  invalidVerificationCode: 'Invalid or expired verification code',
+  invalidPasswordResetCode: 'Invalid or expired password reset code',
+  invalidPasswordResetToken: 'Invalid or expired password reset session',
 });
 
-const DEFAULT_EMAIL_VERIFICATION_TTL_HOURS = 24;
-const DEFAULT_PASSWORD_RESET_TTL_MINUTES = 60;
-const HOUR_MS = 60 * 60 * 1000;
+export const AUTH_CODE_LENGTH = 6;
+export const AUTH_CODE_MAX_ATTEMPTS = 5;
+
+const DEFAULT_AUTH_CODE_TTL_MINUTES = 10;
+const DEFAULT_PASSWORD_RESET_GRANT_TTL_MINUTES = 10;
 const MINUTE_MS = 60 * 1000;
 
 function readPositiveInteger(name, fallback) {
@@ -32,7 +37,57 @@ function readPositiveInteger(name, fallback) {
   return parsed;
 }
 
-export function createRawEmailToken() {
+async function withTransaction(db, work) {
+  if (typeof db.connect !== 'function') {
+    return work(db);
+  }
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function normalizeEmail(email) {
+  return String(email ?? '').trim().toLowerCase();
+}
+
+function isValidCode(code) {
+  return new RegExp(`^\\d{${AUTH_CODE_LENGTH}}$`).test(String(code ?? '').trim());
+}
+
+function getCodeExpiresAt(now = new Date()) {
+  const ttlMinutes = readPositiveInteger(
+    'AUTH_CODE_TTL_MINUTES',
+    DEFAULT_AUTH_CODE_TTL_MINUTES,
+  );
+  return new Date(now.getTime() + ttlMinutes * MINUTE_MS);
+}
+
+function getPasswordResetGrantExpiresAt(now = new Date()) {
+  const ttlMinutes = readPositiveInteger(
+    'PASSWORD_RESET_GRANT_TTL_MINUTES',
+    DEFAULT_PASSWORD_RESET_GRANT_TTL_MINUTES,
+  );
+  return new Date(now.getTime() + ttlMinutes * MINUTE_MS);
+}
+
+export function createRawEmailCode() {
+  return crypto
+    .randomInt(0, 10 ** AUTH_CODE_LENGTH)
+    .toString()
+    .padStart(AUTH_CODE_LENGTH, '0');
+}
+
+export function createRawPasswordResetGrant() {
   return crypto.randomBytes(32).toString('base64url');
 }
 
@@ -43,208 +98,207 @@ export function hashEmailToken(token) {
     .digest('hex');
 }
 
-export function getEmailVerificationExpiresAt(now = new Date()) {
-  const ttlHours = readPositiveInteger(
-    'EMAIL_VERIFICATION_TTL_HOURS',
-    DEFAULT_EMAIL_VERIFICATION_TTL_HOURS
-  );
+async function createAuthCode({ userId, email, tokenType, db, now }) {
+  const normalizedUserId = Number(userId);
+  const normalizedEmail = normalizeEmail(email);
 
-  return new Date(now.getTime() + ttlHours * HOUR_MS);
+  if (!Number.isInteger(normalizedUserId) || normalizedUserId <= 0) {
+    throw new Error('Valid user id is required for authentication email');
+  }
+  if (!normalizedEmail) {
+    throw new Error('Email is required for authentication email');
+  }
+
+  const code = createRawEmailCode();
+  const codeHash = await bcrypt.hash(code, 10);
+  const expiresAt = getCodeExpiresAt(now);
+
+  await withTransaction(db, async (client) => {
+    await client.query(
+      `UPDATE auth_email_tokens
+       SET consumed_at = NOW()
+       WHERE user_id = $1
+         AND token_type = $2
+         AND consumed_at IS NULL`,
+      [normalizedUserId, tokenType],
+    );
+
+    await client.query(
+      `INSERT INTO auth_email_tokens
+         (user_id, email, token_type, token_hash, code_hash, failed_attempts, expires_at)
+       VALUES ($1, $2, $3, NULL, $4, 0, $5)`,
+      [normalizedUserId, normalizedEmail, tokenType, codeHash, expiresAt],
+    );
+  });
+
+  return { code, expiresAt };
 }
 
-export function getPasswordResetExpiresAt(now = new Date()) {
-  const ttlMinutes = readPositiveInteger(
-    'PASSWORD_RESET_TTL_MINUTES',
-    DEFAULT_PASSWORD_RESET_TTL_MINUTES
-  );
-
-  return new Date(now.getTime() + ttlMinutes * MINUTE_MS);
-}
-
-export async function createEmailVerificationToken({
+export function createEmailVerificationCode({
   userId,
   email,
   db = pool,
   now = new Date(),
 }) {
-  const normalizedUserId = Number(userId);
-  const normalizedEmail = String(email ?? '').trim().toLowerCase();
-
-  if (!Number.isInteger(normalizedUserId) || normalizedUserId <= 0) {
-    throw new Error('Valid user id is required for email verification');
-  }
-
-  if (!normalizedEmail) {
-    throw new Error('Email is required for email verification');
-  }
-
-  const token = createRawEmailToken();
-  const tokenHash = hashEmailToken(token);
-  const expiresAt = getEmailVerificationExpiresAt(now);
-
-  await db.query(
-    `UPDATE auth_email_tokens
-     SET consumed_at = NOW()
-     WHERE user_id = $1
-       AND token_type = $2
-       AND consumed_at IS NULL`,
-    [normalizedUserId, AUTH_EMAIL_TOKEN_TYPES.emailVerification]
-  );
-
-  await db.query(
-    `INSERT INTO auth_email_tokens
-       (user_id, email, token_type, token_hash, expires_at)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [
-      normalizedUserId,
-      normalizedEmail,
-      AUTH_EMAIL_TOKEN_TYPES.emailVerification,
-      tokenHash,
-      expiresAt,
-    ]
-  );
-
-  return { token, expiresAt };
+  return createAuthCode({
+    userId,
+    email,
+    tokenType: AUTH_EMAIL_TOKEN_TYPES.emailVerification,
+    db,
+    now,
+  });
 }
 
-export async function createPasswordResetToken({
+export function createPasswordResetCode({
   userId,
   email,
   db = pool,
   now = new Date(),
 }) {
-  const normalizedUserId = Number(userId);
-  const normalizedEmail = String(email ?? '')
-    .trim()
-    .toLowerCase();
-
-  if (!Number.isInteger(normalizedUserId) || normalizedUserId <= 0) {
-    throw new Error('Valid user id is required for password reset');
-  }
-
-  if (!normalizedEmail) {
-    throw new Error('Email is required for password reset');
-  }
-
-  const token = createRawEmailToken();
-  const tokenHash = hashEmailToken(token);
-  const expiresAt = getPasswordResetExpiresAt(now);
-
-  await db.query(
-    `UPDATE auth_email_tokens
-     SET consumed_at = NOW()
-     WHERE user_id = $1
-       AND token_type = $2
-       AND consumed_at IS NULL`,
-    [normalizedUserId, AUTH_EMAIL_TOKEN_TYPES.passwordReset]
-  );
-
-  await db.query(
-    `INSERT INTO auth_email_tokens
-     (user_id, email, token_type, token_hash, expires_at)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [
-      normalizedUserId,
-      normalizedEmail,
-      AUTH_EMAIL_TOKEN_TYPES.passwordReset,
-      tokenHash,
-      expiresAt,
-    ]
-  );
-
-  return { token, expiresAt };
+  return createAuthCode({
+    userId,
+    email,
+    tokenType: AUTH_EMAIL_TOKEN_TYPES.passwordReset,
+    db,
+    now,
+  });
 }
 
-export async function consumeEmailVerificationToken(token, { db = pool } = {}) {
-  const normalizedToken = String(token ?? '').trim();
-  if (!normalizedToken) {
-    return { error: AUTH_EMAIL_TOKEN_MESSAGES.invalidVerificationToken };
-  }
-
-  const tokenResult = await db.query(
-    `UPDATE auth_email_tokens
-     SET consumed_at = NOW()
-     WHERE token_hash = $1
-       AND token_type = $2
-       AND consumed_at IS NULL
-       AND expires_at > NOW()
-     RETURNING user_id, email`,
-    [
-      hashEmailToken(normalizedToken),
-      AUTH_EMAIL_TOKEN_TYPES.emailVerification,
-    ]
-  );
-
-  const tokenRow = tokenResult.rows[0];
-  if (!tokenRow) {
-    return { error: AUTH_EMAIL_TOKEN_MESSAGES.invalidVerificationToken };
-  }
-
-  const userResult = await db.query(
-    `UPDATE users
-     SET email_verified = TRUE,
-         email_verified_at = COALESCE(email_verified_at, NOW())
-     WHERE user_id = $1
-       AND LOWER(email) = $2
-     RETURNING user_id, email, email_verified, email_verified_at`,
-    [tokenRow.user_id, String(tokenRow.email ?? '').trim().toLowerCase()]
-  );
-
-  const user = userResult.rows[0];
-  if (!user) {
-    return { error: AUTH_EMAIL_TOKEN_MESSAGES.invalidVerificationToken };
-  }
-
-  return { user };
-}
-
-export async function resetPasswordWithToken({
-  token,
-  passwordHash,
-  db = pool,
+async function findAndCheckCode({
+  client,
+  code,
+  tokenType,
+  userId,
+  email,
+  invalidMessage,
 }) {
-  const normalizedToken = String(token ?? '').trim();
-  const normalizedPasswordHash = String(passwordHash ?? '').trim();
-
-  if (!normalizedToken || !normalizedPasswordHash) {
-    return { error: AUTH_EMAIL_TOKEN_MESSAGES.invalidPasswordResetToken };
+  if (!isValidCode(code)) {
+    return { error: invalidMessage };
   }
 
-  const tokenResult = await db.query(
-    `UPDATE auth_email_tokens
-     SET consumed_at = NOW()
-     WHERE token_hash = $1
-       AND token_type = $2
-       AND consumed_at IS NULL
-       AND expires_at > NOW()
-     RETURNING user_id, email`,
-    [hashEmailToken(normalizedToken), AUTH_EMAIL_TOKEN_TYPES.passwordReset]
+  const conditions = [
+    'token_type = $1',
+    'consumed_at IS NULL',
+    'expires_at > NOW()',
+    `failed_attempts < ${AUTH_CODE_MAX_ATTEMPTS}`,
+  ];
+  const params = [tokenType];
+
+  if (userId != null) {
+    params.push(Number(userId));
+    conditions.push(`user_id = $${params.length}`);
+  } else {
+    params.push(normalizeEmail(email));
+    conditions.push(`LOWER(email) = $${params.length}`);
+  }
+
+  const result = await client.query(
+    `SELECT token_id, user_id, email, code_hash
+     FROM auth_email_tokens
+     WHERE ${conditions.join('\n       AND ')}
+     ORDER BY created_at DESC
+     LIMIT 1
+     FOR UPDATE`,
+    params,
   );
+  const tokenRow = result.rows[0];
 
-  const tokenRow = tokenResult.rows[0];
-  if (!tokenRow) {
-    return { error: AUTH_EMAIL_TOKEN_MESSAGES.invalidPasswordResetToken };
+  if (!tokenRow?.code_hash) {
+    return { error: invalidMessage };
   }
 
-  const userResult = await db.query(
-    `UPDATE users
-     SET password = $3
-     WHERE user_id = $1
-       AND LOWER(email) = $2
-     RETURNING user_id, email`,
-    [
-      tokenRow.user_id,
-      String(tokenRow.email ?? '')
-        .trim()
-        .toLowerCase(),
-      normalizedPasswordHash,
-    ]
-  );
-
-  const user = userResult.rows[0];
-  if (!user) {
-    return { error: AUTH_EMAIL_TOKEN_MESSAGES.invalidPasswordResetToken };
+  const valid = await bcrypt.compare(String(code).trim(), tokenRow.code_hash);
+  if (!valid) {
+    await client.query(
+      `UPDATE auth_email_tokens
+       SET failed_attempts = failed_attempts + 1,
+           consumed_at = CASE
+             WHEN failed_attempts + 1 >= $2 THEN NOW()
+             ELSE consumed_at
+           END
+       WHERE token_id = $1`,
+      [tokenRow.token_id, AUTH_CODE_MAX_ATTEMPTS],
+    );
+    return { error: invalidMessage };
   }
 
-  return { user };
+  return { tokenRow };
+}
+
+export function consumeEmailVerificationCode({ userId, code, db = pool }) {
+  const normalizedUserId = Number(userId);
+  if (!Number.isInteger(normalizedUserId) || normalizedUserId <= 0) {
+    return Promise.resolve({
+      error: AUTH_EMAIL_TOKEN_MESSAGES.invalidVerificationCode,
+    });
+  }
+
+  return withTransaction(db, async (client) => {
+    const checked = await findAndCheckCode({
+      client,
+      code,
+      tokenType: AUTH_EMAIL_TOKEN_TYPES.emailVerification,
+      userId: normalizedUserId,
+      invalidMessage: AUTH_EMAIL_TOKEN_MESSAGES.invalidVerificationCode,
+    });
+    if (checked.error) return checked;
+
+    const tokenRow = checked.tokenRow;
+    const userResult = await client.query(
+      `UPDATE users
+       SET email_verified = TRUE,
+           email_verified_at = COALESCE(email_verified_at, NOW())
+       WHERE user_id = $1
+         AND LOWER(email) = $2
+       RETURNING user_id, email, email_verified, email_verified_at`,
+      [tokenRow.user_id, normalizeEmail(tokenRow.email)],
+    );
+    const user = userResult.rows[0];
+    if (!user) {
+      return { error: AUTH_EMAIL_TOKEN_MESSAGES.invalidVerificationCode };
+    }
+
+    await client.query(
+      `UPDATE auth_email_tokens
+       SET consumed_at = NOW()
+       WHERE token_id = $1`,
+      [tokenRow.token_id],
+    );
+
+    return { user };
+  });
+}
+
+export function exchangePasswordResetCode({ email, code, db = pool, now = new Date() }) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) {
+    return Promise.resolve({
+      error: AUTH_EMAIL_TOKEN_MESSAGES.invalidPasswordResetCode,
+    });
+  }
+
+  return withTransaction(db, async (client) => {
+    const checked = await findAndCheckCode({
+      client,
+      code,
+      tokenType: AUTH_EMAIL_TOKEN_TYPES.passwordReset,
+      email: normalizedEmail,
+      invalidMessage: AUTH_EMAIL_TOKEN_MESSAGES.invalidPasswordResetCode,
+    });
+    if (checked.error) return checked;
+
+    const resetToken = createRawPasswordResetGrant();
+    const expiresAt = getPasswordResetGrantExpiresAt(now);
+    await client.query(
+      `UPDATE auth_email_tokens
+       SET token_hash = $2,
+           code_hash = NULL,
+           failed_attempts = 0,
+           expires_at = $3
+       WHERE token_id = $1`,
+      [checked.tokenRow.token_id, hashEmailToken(resetToken), expiresAt],
+    );
+
+    return { resetToken, expiresAt };
+  });
 }

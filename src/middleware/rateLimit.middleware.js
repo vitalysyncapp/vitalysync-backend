@@ -150,6 +150,12 @@ export function createRateLimiters(config = rateLimitConfig) {
       policy: config.passwordReset,
       keyGenerator: loginIdentityKey,
     }),
+    passwordChange: createLimiter({
+      identifier: 'password-change',
+      policy: config.passwordChange,
+      keyGenerator: authenticatedUserKey,
+      skipSuccessfulRequests: true,
+    }),
     nutritionAnalysis: createLimiter({
       identifier: 'nutrition-analysis',
       policy: config.nutritionAnalysis,

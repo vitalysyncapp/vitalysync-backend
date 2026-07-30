@@ -6,15 +6,16 @@ import {
 } from '../middleware/auth.middleware.js';
 import { rateLimiters } from '../middleware/rateLimit.middleware.js';
 import {
+  changePassword,
   confirmPasswordReset,
   confirmEmailVerification,
   deleteAccount,
   login,
   requestPasswordReset,
   resendEmailVerification,
-  showPasswordResetForm,
   signup,
-  updateProfile
+  updateProfile,
+  verifyPasswordResetCode,
 } from '../controllers/auth.controller.js';
 
 const router = express.Router();
@@ -27,11 +28,11 @@ router.post(
   rateLimiters.passwordReset,
   requestPasswordReset
 );
-router.get(
-  '/password-reset/confirm',
+router.post(
+  '/password-reset/verify-code',
   rateLimiters.authBurst,
   rateLimiters.passwordReset,
-  showPasswordResetForm
+  verifyPasswordResetCode,
 );
 router.post(
   '/password-reset/confirm',
@@ -41,15 +42,24 @@ router.post(
 );
 router.post(
   '/email-verification/resend',
+  requireAuth,
   rateLimiters.authBurst,
   rateLimiters.emailVerification,
-  resendEmailVerification
+  resendEmailVerification,
 );
-router.get(
+router.post(
   '/email-verification/confirm',
+  requireAuth,
   rateLimiters.authBurst,
   rateLimiters.emailVerification,
-  confirmEmailVerification
+  confirmEmailVerification,
+);
+router.put(
+  '/password',
+  requireAuth,
+  rateLimiters.passwordChange,
+  enforceAuthenticatedUser,
+  changePassword,
 );
 router.put(
   '/profile',

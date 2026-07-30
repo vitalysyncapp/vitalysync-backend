@@ -1,3 +1,4 @@
+import pool from '../config/db.js';
 import { verifyAccessToken } from '../services/authToken.service.js';
 
 function extractBearerToken(req) {
@@ -39,34 +40,65 @@ function findRequestedUserIds(req) {
   return [...new Set(requestedUserIds)];
 }
 
-export function requireAuth(req, res, next) {
+export async function validateTokenVersion(payload, { db = pool, lookup } = {}) {
+  const userId = parsePositiveInt(payload?.sub);
+  if (!userId) {
+    return false;
+  }
+
+  if (typeof lookup === 'function') {
+    const version = await lookup(userId);
+    return Number(version) === Number(payload.ver ?? 0);
+  }
+
+  const result = await db.query(
+    `SELECT auth_token_version
+     FROM users
+     WHERE user_id = $1`,
+    [userId],
+  );
+  const user = result.rows[0];
+  return user != null && Number(user.auth_token_version ?? 0) === Number(payload.ver ?? 0);
+}
+
+async function authenticateToken(req, res, next, { optional }) {
   const token = extractBearerToken(req);
 
   if (!token) {
+    if (optional) {
+      return next();
+    }
     return res.status(401).json({ message: 'Authentication token required' });
   }
 
+  let payload;
   try {
-    req.auth = verifyAccessToken(token);
-    return next();
+    payload = verifyAccessToken(token);
   } catch (_error) {
     return res.status(401).json({ message: 'Invalid or expired authentication token' });
   }
+
+  try {
+    const validVersion = await validateTokenVersion(payload, {
+      lookup: req.app?.locals?.authTokenVersionLookup,
+    });
+    if (!validVersion) {
+      return res.status(401).json({ message: 'Invalid or expired authentication token' });
+    }
+  } catch (error) {
+    return next(error);
+  }
+
+  req.auth = payload;
+  return next();
+}
+
+export function requireAuth(req, res, next) {
+  return authenticateToken(req, res, next, { optional: false });
 }
 
 export function optionalAuth(req, res, next) {
-  const token = extractBearerToken(req);
-
-  if (!token) {
-    return next();
-  }
-
-  try {
-    req.auth = verifyAccessToken(token);
-    return next();
-  } catch (_error) {
-    return res.status(401).json({ message: 'Invalid or expired authentication token' });
-  }
+  return authenticateToken(req, res, next, { optional: true });
 }
 
 export function enforceAuthenticatedUser(req, res, next) {

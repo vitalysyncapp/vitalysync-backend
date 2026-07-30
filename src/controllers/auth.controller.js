@@ -3,11 +3,15 @@ import pool from '../config/db.js';
 import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import { createAccessToken } from '../services/authToken.service.js';
 import {
-  consumeEmailVerificationToken,
-  createEmailVerificationToken,
-  createPasswordResetToken,
-  resetPasswordWithToken,
+  consumeEmailVerificationCode,
+  createEmailVerificationCode,
+  createPasswordResetCode,
+  exchangePasswordResetCode,
 } from '../services/authEmailToken.service.js';
+import {
+  changeAuthenticatedPassword,
+  resetPasswordWithGrant,
+} from '../services/password.service.js';
 import {
   normalizeEmail,
   validateEmailSyntax,
@@ -21,11 +25,11 @@ let authSchemaSupportFetchedAt = 0;
 const AUTH_SCHEMA_CACHE_TTL_MS = 5 * 60 * 1000;
 const ALLOWED_GENDERS = new Set(['Male', 'Female', 'Other']);
 const RESEND_VERIFICATION_MESSAGE =
-  'If this email belongs to an unverified VitalySync account, a verification link has been sent.';
+  'A verification code has been sent to your account email.';
 const PASSWORD_RESET_REQUEST_MESSAGE =
-  'If this email belongs to a VitalySync account, a password reset link has been sent.';
+  'If this email belongs to a VitalySync account, a password reset code has been sent.';
 const PASSWORD_RESET_SUCCESS_MESSAGE =
-  'Password reset successfully. You can return to VitalySync and sign in.';
+  'Password reset successfully. Sign in again with your new password.';
 
 function normalizeNullableText(value) {
   const trimmed = String(value ?? '').trim();
@@ -197,44 +201,12 @@ async function getAuthSchemaSupport() {
   return authSchemaSupportCache;
 }
 
-function getPublicApiBaseUrl(req) {
-  const configured = String(process.env.API_PUBLIC_URL ?? '').trim();
-  if (configured) {
-    return configured.replace(/\/+$/, '');
-  }
-
-  const host =
-    typeof req.get === 'function'
-      ? req.get('host')
-      : req.headers?.host;
-  if (host) {
-    const protocol = req.protocol || (req.secure ? 'https' : 'http');
-    return `${protocol}://${host}`;
-  }
-
-  return `http://localhost:${process.env.PORT || 3000}`;
+function remainingMinutes(expiresAt) {
+  return Math.max(1, Math.ceil((expiresAt.getTime() - Date.now()) / (60 * 1000)));
 }
 
-function buildEmailVerificationUrl(req, token) {
-  const url = new URL(
-    '/api/auth/email-verification/confirm',
-    getPublicApiBaseUrl(req)
-  );
-  url.searchParams.set('token', token);
-  return url.toString();
-}
-
-function buildPasswordResetUrl(req, token) {
-  const url = new URL(
-    '/api/auth/password-reset/confirm',
-    getPublicApiBaseUrl(req)
-  );
-  url.searchParams.set('token', token);
-  return url.toString();
-}
-
-async function sendVerificationEmailForUser(req, user) {
-  const token = await createEmailVerificationToken({
+async function sendVerificationEmailForUser(user) {
+  const code = await createEmailVerificationCode({
     userId: user.user_id,
     email: user.email,
   });
@@ -242,12 +214,13 @@ async function sendVerificationEmailForUser(req, user) {
   await mailService.sendVerificationEmail({
     to: user.email,
     username: user.username,
-    verificationUrl: buildEmailVerificationUrl(req, token.token),
+    verificationCode: code.code,
+    expiresInMinutes: remainingMinutes(code.expiresAt),
   });
 }
 
-async function sendPasswordResetEmailForUser(req, user) {
-  const token = await createPasswordResetToken({
+async function sendPasswordResetEmailForUser(user) {
+  const code = await createPasswordResetCode({
     userId: user.user_id,
     email: user.email,
   });
@@ -255,7 +228,8 @@ async function sendPasswordResetEmailForUser(req, user) {
   await mailService.sendPasswordResetEmail({
     to: user.email,
     username: user.username,
-    passwordResetUrl: buildPasswordResetUrl(req, token.token),
+    resetCode: code.code,
+    expiresInMinutes: remainingMinutes(code.expiresAt),
   });
 }
 
@@ -268,7 +242,7 @@ function queueVerificationEmail(req, user, schema) {
     return;
   }
 
-  sendVerificationEmailForUser(req, user).catch((error) => {
+  sendVerificationEmailForUser(user).catch((error) => {
     logApiError(req, 'Email verification send error', error);
   });
 }
@@ -278,219 +252,9 @@ function queuePasswordResetEmail(req, user, schema) {
     return;
   }
 
-  sendPasswordResetEmailForUser(req, user).catch((error) => {
+  sendPasswordResetEmailForUser(user).catch((error) => {
     logApiError(req, 'Password reset send error', error);
   });
-}
-
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-
-function acceptsJson(req) {
-  return (
-    typeof req.accepts === 'function' &&
-    req.accepts(['html', 'json']) === 'json'
-  );
-}
-
-function sendVerificationResult(req, res, { status, message }) {
-  const shouldSendJson = acceptsJson(req);
-
-  if (shouldSendJson) {
-    return res.status(status).json({ message });
-  }
-
-  return res.status(status).type('html').send(`<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>VitalySync Email Verification</title>
-    <style>
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        font-family: Arial, sans-serif;
-        background: #f4fbf8;
-        color: #17324d;
-      }
-      main {
-        width: min(92vw, 440px);
-        padding: 28px;
-        border: 1px solid #cfe8df;
-        border-radius: 16px;
-        background: white;
-        box-shadow: 0 16px 44px rgba(17, 40, 65, 0.12);
-      }
-      h1 {
-        margin: 0 0 10px;
-        font-size: 24px;
-      }
-      p {
-        margin: 0;
-        line-height: 1.5;
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>VitalySync</h1>
-      <p>${escapeHtml(message)}</p>
-    </main>
-  </body>
-</html>`);
-}
-
-function passwordResetFormHtml({ token, message, isError = false }) {
-  const safeToken = escapeHtml(token);
-  const safeMessage = escapeHtml(message);
-  const messageColor = isError ? '#b42318' : '#315a66';
-
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>VitalySync Password Reset</title>
-    <style>
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        font-family: Arial, sans-serif;
-        background: #f4fbf8;
-        color: #17324d;
-      }
-      main {
-        width: min(92vw, 440px);
-        padding: 28px;
-        border: 1px solid #cfe8df;
-        border-radius: 16px;
-        background: white;
-        box-shadow: 0 16px 44px rgba(17, 40, 65, 0.12);
-      }
-      h1 {
-        margin: 0 0 10px;
-        font-size: 24px;
-      }
-      p {
-        margin: 0 0 18px;
-        line-height: 1.5;
-        color: ${messageColor};
-      }
-      label {
-        display: block;
-        margin: 12px 0 6px;
-        font-weight: 700;
-      }
-      input {
-        width: 100%;
-        box-sizing: border-box;
-        padding: 12px;
-        border: 1px solid #cfe8df;
-        border-radius: 10px;
-        font-size: 16px;
-      }
-      button {
-        width: 100%;
-        margin-top: 18px;
-        padding: 13px 16px;
-        border: 0;
-        border-radius: 10px;
-        background: #1e8f83;
-        color: white;
-        font-size: 16px;
-        font-weight: 700;
-        cursor: pointer;
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>Reset your password</h1>
-      <p>${safeMessage}</p>
-      <form method="post" action="/api/auth/password-reset/confirm">
-        <input type="hidden" name="token" value="${safeToken}">
-        <label for="password">New password</label>
-        <input id="password" name="password" type="password" minlength="6" autocomplete="new-password" required>
-        <label for="confirm_password">Confirm password</label>
-        <input id="confirm_password" name="confirm_password" type="password" minlength="6" autocomplete="new-password" required>
-        <button type="submit">Reset password</button>
-      </form>
-    </main>
-  </body>
-</html>`;
-}
-
-function passwordResetResultHtml(message) {
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>VitalySync Password Reset</title>
-    <style>
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        font-family: Arial, sans-serif;
-        background: #f4fbf8;
-        color: #17324d;
-      }
-      main {
-        width: min(92vw, 440px);
-        padding: 28px;
-        border: 1px solid #cfe8df;
-        border-radius: 16px;
-        background: white;
-        box-shadow: 0 16px 44px rgba(17, 40, 65, 0.12);
-      }
-      h1 {
-        margin: 0 0 10px;
-        font-size: 24px;
-      }
-      p {
-        margin: 0;
-        line-height: 1.5;
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>VitalySync</h1>
-      <p>${escapeHtml(message)}</p>
-    </main>
-  </body>
-</html>`;
-}
-
-function sendPasswordResetResult(req, res, { status, message, token = '', showForm = false, isError = false }) {
-  if (acceptsJson(req)) {
-    return res.status(status).json({ message });
-  }
-
-  if (showForm) {
-    return res.status(status).type('html').send(
-      passwordResetFormHtml({
-        token,
-        message,
-        isError,
-      }),
-    );
-  }
-
-  return res.status(status).type('html').send(passwordResetResultHtml(message));
 }
 
 async function ensureUserStreak(userId) {
@@ -607,6 +371,7 @@ export async function signup(req, res) {
            user_id,
            username,
            email,
+           auth_token_version,
            ${emailVerifiedSelect},
            ${ageSelect},
            ${genderSelect},
@@ -679,6 +444,7 @@ export async function login(req, res) {
          ${ageSelect},
          ${genderSelect},
          users.password,
+         users.auth_token_version,
          COALESCE(${profileRoleSelect}, ${userRoleSelect}) AS role,
          COALESCE(${profileLifestyleSelect}, ${userLifestyleSelect}) AS lifestyle_type,
          COALESCE(${profileWellnessSelect}, ${userWellnessSelect}) AS wellness_goal,
@@ -887,22 +653,31 @@ export async function updateProfile(req, res) {
 
 export async function resendEmailVerification(req, res) {
   try {
-    const normalizedEmail = normalizeEmail(req.body?.email);
+    const userId = getAuthenticatedUserId(req);
     const schema = await getAuthSchemaSupport();
 
-    if (normalizedEmail && schema.has_auth_email_tokens === true && schema.has_email_verified === true) {
-      const userResult = await pool.query(
-        `SELECT user_id, username, email, email_verified
-         FROM users
-         WHERE LOWER(email) = $1`,
-        [normalizedEmail],
-      );
-      const user = userResult.rows[0];
-
-      if (user && user.email_verified !== true) {
-        queueVerificationEmail(req, user, schema);
-      }
+    if (!userId) {
+      return res.status(401).json({ message: 'Authentication token required' });
     }
+    if (schema.has_auth_email_tokens !== true || schema.has_email_verified !== true) {
+      return res.status(503).json({ message: 'Email verification is not available right now' });
+    }
+
+    const userResult = await pool.query(
+      `SELECT user_id, username, email, email_verified
+       FROM users
+       WHERE user_id = $1`,
+      [userId],
+    );
+    const user = userResult.rows[0];
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    if (user.email_verified === true) {
+      return res.status(200).json({ message: 'Email is already verified.' });
+    }
+
+    queueVerificationEmail(req, user, schema);
 
     return res.status(200).json({
       message: RESEND_VERIFICATION_MESSAGE,
@@ -917,23 +692,24 @@ export async function resendEmailVerification(req, res) {
 
 export async function confirmEmailVerification(req, res) {
   try {
-    const result = await consumeEmailVerificationToken(req.query?.token);
+    const result = await consumeEmailVerificationCode({
+      userId: getAuthenticatedUserId(req),
+      code: req.body?.code,
+    });
 
     if (result.error) {
-      return sendVerificationResult(req, res, {
-        status: 400,
+      return res.status(400).json({
         message: result.error,
       });
     }
 
-    return sendVerificationResult(req, res, {
-      status: 200,
-      message: 'Email verified successfully. You can return to VitalySync.',
+    return res.status(200).json({
+      message: 'Email verified successfully.',
+      email_verified: true,
     });
   } catch (err) {
     logApiError(req, 'Confirm email verification error', err);
-    return sendVerificationResult(req, res, {
-      status: 500,
+    return res.status(500).json({
       message: 'Unable to verify this email right now.',
     });
   }
@@ -979,87 +755,104 @@ export async function requestPasswordReset(req, res) {
   }
 }
 
-export async function showPasswordResetForm(req, res) {
-  const token = String(req.query?.token ?? '').trim();
-
-  if (!token) {
-    return sendPasswordResetResult(req, res, {
-      status: 400,
-      message: 'Password reset token is required.',
-      isError: true,
-    });
-  }
-
-  return sendPasswordResetResult(req, res, {
-    status: 200,
-    message: 'Choose a new password for your VitalySync account.',
-    token,
-    showForm: true,
-  });
-}
-
-export async function confirmPasswordReset(req, res) {
-  const token = String(req.body?.token ?? req.query?.token ?? '').trim();
-  const normalizedPassword = normalizeResetPassword(req.body?.password);
-  const confirmPassword = String(req.body?.confirm_password ?? '').trim();
-  const hasConfirmPassword = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'confirm_password');
-
-  if (!token) {
-    return sendPasswordResetResult(req, res, {
-      status: 400,
-      message: 'Password reset token is required.',
-      isError: true,
-    });
-  }
-
-  if (normalizedPassword.error) {
-    return sendPasswordResetResult(req, res, {
-      status: 400,
-      message: normalizedPassword.error,
-      token,
-      showForm: true,
-      isError: true,
-    });
-  }
-
-  if (hasConfirmPassword && confirmPassword !== normalizedPassword.value) {
-    return sendPasswordResetResult(req, res, {
-      status: 400,
-      message: 'Passwords do not match.',
-      token,
-      showForm: true,
-      isError: true,
-    });
+export async function verifyPasswordResetCode(req, res) {
+  const normalizedEmail = normalizeEmail(req.body?.email);
+  const emailSyntax = validateEmailSyntax(normalizedEmail);
+  if (!normalizedEmail || emailSyntax.error) {
+    return res.status(400).json({ message: 'Invalid or expired password reset code' });
   }
 
   try {
-    const passwordHash = await bcrypt.hash(normalizedPassword.value, 10);
-    const result = await resetPasswordWithToken({
-      token,
-      passwordHash,
+    const result = await exchangePasswordResetCode({
+      email: normalizedEmail,
+      code: req.body?.code,
+    });
+    if (result.error) {
+      return res.status(400).json({ message: result.error });
+    }
+
+    return res.status(200).json({
+      message: 'Code verified. Choose a new password.',
+      reset_token: result.resetToken,
+      expires_at: result.expiresAt.toISOString(),
+    });
+  } catch (err) {
+    logApiError(req, 'Verify password reset code error', err);
+    return res.status(500).json({ message: 'Unable to verify this code right now.' });
+  }
+}
+
+export async function confirmPasswordReset(req, res) {
+  const resetToken = String(req.body?.reset_token ?? '').trim();
+  const normalizedPassword = normalizeResetPassword(req.body?.new_password);
+  const confirmPassword = String(req.body?.confirm_password ?? '').trim();
+
+  if (!resetToken) {
+    return res.status(400).json({ message: 'Password reset session is required.' });
+  }
+
+  if (normalizedPassword.error) {
+    return res.status(400).json({ message: normalizedPassword.error });
+  }
+
+  if (!confirmPassword || confirmPassword !== normalizedPassword.value) {
+    return res.status(400).json({ message: 'Passwords do not match.' });
+  }
+
+  try {
+    const result = await resetPasswordWithGrant({
+      resetToken,
+      newPassword: normalizedPassword.value,
     });
 
     if (result.error) {
-      return sendPasswordResetResult(req, res, {
-        status: 400,
-        message: result.error,
-        isError: true,
-      });
+      return res.status(400).json({ message: result.error });
     }
 
-    return sendPasswordResetResult(req, res, {
-      status: 200,
+    return res.status(200).json({
       message: PASSWORD_RESET_SUCCESS_MESSAGE,
+      sessions_revoked: true,
     });
   } catch (err) {
     logApiError(req, 'Confirm password reset error', err);
-    return sendPasswordResetResult(req, res, {
-      status: 500,
+    return res.status(500).json({
       message: 'Unable to reset this password right now.',
-      token,
-      showForm: true,
-      isError: true,
     });
+  }
+}
+
+export async function changePassword(req, res) {
+  const currentPassword = String(req.body?.current_password ?? '').trim();
+  const normalizedPassword = normalizeResetPassword(req.body?.new_password);
+  const confirmPassword = String(req.body?.confirm_password ?? '').trim();
+
+  if (!currentPassword) {
+    return res.status(400).json({ message: 'Current password is required' });
+  }
+  if (normalizedPassword.error) {
+    return res.status(400).json({ message: normalizedPassword.error });
+  }
+  if (!confirmPassword || confirmPassword !== normalizedPassword.value) {
+    return res.status(400).json({ message: 'Passwords do not match.' });
+  }
+
+  try {
+    const result = await changeAuthenticatedPassword({
+      userId: getAuthenticatedUserId(req),
+      currentPassword,
+      newPassword: normalizedPassword.value,
+    });
+    if (result.error) {
+      return res.status(400).json({ message: result.error });
+    }
+
+    return res.status(200).json({
+      message: 'Password changed successfully. Sign in again with your new password.',
+      sessions_revoked: true,
+    });
+  } catch (err) {
+    logApiError(req, 'Change password error', err);
+    return res.status(500).json({ message: 'Unable to change this password right now.' });
   }
 }
 
