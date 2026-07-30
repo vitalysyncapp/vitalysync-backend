@@ -52,13 +52,15 @@ export async function validateTokenVersion(payload, { db = pool, lookup } = {}) 
   }
 
   const result = await db.query(
-    `SELECT auth_token_version
+    `SELECT auth_token_version, deactivated_at
      FROM users
      WHERE user_id = $1`,
     [userId],
   );
   const user = result.rows[0];
-  return user != null && Number(user.auth_token_version ?? 0) === Number(payload.ver ?? 0);
+  return user != null &&
+    user.deactivated_at == null &&
+    Number(user.auth_token_version ?? 0) === Number(payload.ver ?? 0);
 }
 
 async function authenticateToken(req, res, next, { optional }) {

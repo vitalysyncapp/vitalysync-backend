@@ -9,7 +9,6 @@ import {
   changePassword,
   confirmPasswordReset,
   confirmEmailVerification,
-  deleteAccount,
   login,
   requestPasswordReset,
   resendEmailVerification,
@@ -68,12 +67,4 @@ router.put(
   enforceAuthenticatedUser,
   updateProfile
 );
-router.delete(
-  '/account',
-  requireAuth,
-  rateLimiters.general,
-  enforceAuthenticatedUser,
-  deleteAccount
-);
-
 export default router;

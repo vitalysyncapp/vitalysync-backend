@@ -156,6 +156,12 @@ export function createRateLimiters(config = rateLimitConfig) {
       keyGenerator: authenticatedUserKey,
       skipSuccessfulRequests: true,
     }),
+    accountAction: createLimiter({
+      identifier: 'account-action',
+      policy: config.accountAction,
+      keyGenerator: authenticatedUserKey,
+      skipSuccessfulRequests: true,
+    }),
     nutritionAnalysis: createLimiter({
       identifier: 'nutrition-analysis',
       policy: config.nutritionAnalysis,

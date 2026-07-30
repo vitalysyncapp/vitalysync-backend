@@ -13,6 +13,7 @@ import { rateLimitConfig } from './config/rateLimit.config.js';
 import { rateLimiters } from './middleware/rateLimit.middleware.js';
 import { logApiError } from './utils/errorLogging.js';
 import adaptiveRoutes from './routes/adaptive.routes.js';
+import accountRoutes from './routes/account.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import activityRoutes from './routes/activity.routes.js';
 import burnoutRoutes from './routes/burnout.routes.js';
@@ -48,6 +49,7 @@ app.get('/api/health', (_req, res) => {
 app.use('/api', rateLimiters.perimeter);
 
 app.use('/api/auth', authRoutes);
+app.use('/api/account', accountRoutes);
 app.use(
   '/api/environment',
   optionalAuth,

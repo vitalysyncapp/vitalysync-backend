@@ -184,6 +184,18 @@ async function findAndCheckCode({
   ];
   const params = [tokenType];
 
+  if (tokenType === AUTH_EMAIL_TOKEN_TYPES.passwordReset) {
+    conditions.push(`EXISTS (
+      SELECT 1
+      FROM users lifecycle_user
+      WHERE lifecycle_user.user_id = auth_email_tokens.user_id
+        AND (
+          lifecycle_user.deactivated_at IS NULL
+          OR lifecycle_user.reactivation_deadline > NOW()
+        )
+    )`);
+  }
+
   if (userId != null) {
     params.push(Number(userId));
     conditions.push(`user_id = $${params.length}`);

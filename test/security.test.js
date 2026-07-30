@@ -169,6 +169,22 @@ test('token-version checks accept legacy zero tokens and reject stale sessions',
     ),
     false,
   );
+  assert.equal(
+    await validateTokenVersion(
+      { sub: 12, ver: 2 },
+      {
+        db: {
+          query: async () => ({
+            rows: [{
+              auth_token_version: 2,
+              deactivated_at: new Date(),
+            }],
+          }),
+        },
+      },
+    ),
+    false,
+  );
   await assert.rejects(
     validateTokenVersion(
       { sub: 12, ver: 0 },

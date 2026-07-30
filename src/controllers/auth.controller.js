@@ -1,7 +1,10 @@
 import bcrypt from 'bcrypt';
 import pool from '../config/db.js';
 import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
-import { createAccessToken } from '../services/authToken.service.js';
+import {
+  createAccessToken,
+  createAccountReactivationGrant,
+} from '../services/authToken.service.js';
 import {
   consumeEmailVerificationCode,
   createEmailVerificationCode,
@@ -445,6 +448,9 @@ export async function login(req, res) {
          ${genderSelect},
          users.password,
          users.auth_token_version,
+         users.deactivated_at,
+         users.reactivation_deadline,
+         users.retention_expires_at,
          COALESCE(${profileRoleSelect}, ${userRoleSelect}) AS role,
          COALESCE(${profileLifestyleSelect}, ${userLifestyleSelect}) AS lifestyle_type,
          COALESCE(${profileWellnessSelect}, ${userWellnessSelect}) AS wellness_goal,
@@ -462,6 +468,29 @@ export async function login(req, res) {
 
     const validPassword = await bcrypt.compare(normalizedPassword, user.password);
     if (!validPassword) return res.status(401).json({ message: 'Invalid credentials' });
+
+    if (user.deactivated_at != null) {
+      const reactivationDeadline = new Date(user.reactivation_deadline);
+      if (
+        !Number.isFinite(reactivationDeadline.getTime()) ||
+        reactivationDeadline.getTime() <= Date.now()
+      ) {
+        return res.status(423).json({
+          code: 'ACCOUNT_REACTIVATION_EXPIRED',
+          message: 'The 40-day account reactivation period has ended.',
+          retention_expires_at: user.retention_expires_at,
+        });
+      }
+
+      const grant = createAccountReactivationGrant(user);
+      return res.status(423).json({
+        code: 'ACCOUNT_REACTIVATION_REQUIRED',
+        message: 'Confirm that you want to reactivate this account.',
+        reactivation_deadline: user.reactivation_deadline,
+        retention_expires_at: user.retention_expires_at,
+        ...grant,
+      });
+    }
 
     const streak = await ensureUserStreak(user.user_id);
 
@@ -734,7 +763,11 @@ export async function requestPasswordReset(req, res) {
       const userResult = await pool.query(
         `SELECT user_id, username, email
          FROM users
-         WHERE LOWER(email) = $1`,
+         WHERE LOWER(email) = $1
+           AND (
+             deactivated_at IS NULL
+             OR reactivation_deadline > NOW()
+           )`,
         [normalizedEmail],
       );
       const user = userResult.rows[0];
@@ -853,183 +886,5 @@ export async function changePassword(req, res) {
   } catch (err) {
     logApiError(req, 'Change password error', err);
     return res.status(500).json({ message: 'Unable to change this password right now.' });
-  }
-}
-
-async function getAccountDeletionSupport(client) {
-  const result = await client.query(`
-    SELECT
-      EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = 'daily_logs'
-      ) AS has_daily_logs,
-      EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = 'daily_activity_logs'
-      ) AS has_daily_activity_logs,
-      EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = 'daily_exercise_goals'
-      ) AS has_daily_exercise_goals,
-      EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = 'user_streaks'
-      ) AS has_user_streaks,
-      EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = 'user_busy_days'
-      ) AS has_user_busy_days,
-      EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = 'user_preferences'
-      ) AS has_user_preferences,
-      EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = 'user_onboarding'
-      ) AS has_user_onboarding,
-      EXISTS (
-        SELECT 1
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-          AND table_name = 'user_environment_snapshots'
-      ) AS has_user_environment_snapshots
-  `);
-
-  return (
-    result.rows[0] ?? {
-      has_daily_logs: false,
-      has_daily_activity_logs: false,
-      has_daily_exercise_goals: false,
-      has_user_streaks: false,
-      has_user_busy_days: false,
-      has_user_preferences: false,
-      has_user_onboarding: false,
-      has_user_onboarding_profiles: false,
-      has_user_onboarding_answers: false,
-      has_user_environment_snapshots: false,
-    }
-  );
-}
-
-export async function deleteAccount(req, res) {
-  const { user_id: rawUserId, email, password } = req.body;
-
-  const userId = getAuthenticatedUserId(req) ?? Number(rawUserId);
-  const normalizedEmail = String(email ?? '')
-    .trim()
-    .toLowerCase();
-  const normalizedPassword = String(password ?? '').trim();
-
-  if (!Number.isInteger(userId) || userId <= 0) {
-    return res.status(400).json({ message: 'Valid user_id is required' });
-  }
-
-  if (!normalizedEmail || !normalizedPassword) {
-    return res.status(400).json({ message: 'Email and password are required' });
-  }
-
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    const userResult = await client.query(
-      `SELECT user_id, email, password
-       FROM users
-       WHERE user_id = $1`,
-      [userId],
-    );
-
-    const user = userResult.rows[0];
-
-    if (!user) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    if (
-      String(user.email ?? '')
-        .trim()
-        .toLowerCase() !== normalizedEmail
-    ) {
-      await client.query('ROLLBACK');
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
-
-    const validPassword = await bcrypt.compare(normalizedPassword, user.password);
-    if (!validPassword) {
-      await client.query('ROLLBACK');
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
-
-    const schema = await getAccountDeletionSupport(client);
-
-    if (schema.has_user_environment_snapshots) {
-      await client.query('DELETE FROM user_environment_snapshots WHERE user_id = $1', [userId]);
-    }
-
-    if (schema.has_daily_logs) {
-      await client.query('DELETE FROM daily_logs WHERE user_id = $1', [userId]);
-    }
-
-    if (schema.has_daily_activity_logs) {
-      await client.query('DELETE FROM daily_activity_logs WHERE user_id = $1', [userId]);
-    }
-
-    if (schema.has_daily_exercise_goals) {
-      await client.query('DELETE FROM daily_exercise_goals WHERE user_id = $1', [userId]);
-    }
-
-    if (schema.has_user_streaks) {
-      await client.query('DELETE FROM user_streaks WHERE user_id = $1', [userId]);
-    }
-
-    if (schema.has_user_busy_days) {
-      await client.query('DELETE FROM user_busy_days WHERE user_id = $1', [userId]);
-    }
-
-    if (schema.has_user_preferences) {
-      await client.query('DELETE FROM user_preferences WHERE user_id = $1', [userId]);
-    }
-
-    if (schema.has_user_onboarding) {
-      await client.query('DELETE FROM user_onboarding WHERE user_id = $1', [userId]);
-    }
-
-    if (schema.has_user_onboarding_answers) {
-      await client.query('DELETE FROM user_onboarding_answers WHERE user_id = $1', [userId]);
-    }
-
-    if (schema.has_user_onboarding_profiles) {
-      await client.query('DELETE FROM user_onboarding_profiles WHERE user_id = $1', [userId]);
-    }
-
-    await client.query('DELETE FROM users WHERE user_id = $1', [userId]);
-
-    await client.query('COMMIT');
-
-    return res.status(200).json({
-      message: 'Account deleted successfully',
-    });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    logApiError(req, 'Delete account error', err);
-    return res.status(500).json({ message: 'Failed to delete account' });
-  } finally {
-    client.release();
   }
 }

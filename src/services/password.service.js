@@ -62,6 +62,10 @@ export function resetPasswordWithGrant({ resetToken, newPassword, db = pool }) {
        FROM users
        WHERE user_id = $1
          AND LOWER(email) = $2
+         AND (
+           deactivated_at IS NULL
+           OR reactivation_deadline > NOW()
+         )
        FOR UPDATE`,
       [tokenRow.user_id, String(tokenRow.email).trim().toLowerCase()],
     );
@@ -111,6 +115,7 @@ export function changeAuthenticatedPassword({
       `SELECT user_id, password
        FROM users
        WHERE user_id = $1
+         AND deactivated_at IS NULL
        FOR UPDATE`,
       [normalizedUserId],
     );

@@ -434,6 +434,99 @@ test('login allows unverified email accounts and exposes verification state', as
   }
 });
 
+test('login challenges eligible deactivated accounts and blocks expired reactivation', async () => {
+  const passwordHash = await bcrypt.hash('secret123', 4);
+  const originalQuery = pool.query;
+  let reactivationDeadline = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+  pool.query = async (sql) => {
+    if (sql.includes('information_schema.columns')) {
+      return {
+        rows: [{
+          has_onboarding_completed: true,
+          has_user_onboarding: false,
+          has_user_onboarding_profiles: false,
+          has_user_onboarding_answers: false,
+          has_user_preferences: false,
+          has_role: true,
+          has_lifestyle_type: true,
+          has_wellness_goal: true,
+          has_age: true,
+          has_gender: true,
+          has_email_verified: true,
+          has_email_verified_at: true,
+          has_auth_email_tokens: true,
+        }],
+      };
+    }
+    if (sql.includes('FROM users') && sql.includes('LOWER(users.email)')) {
+      return {
+        rows: [{
+          user_id: 7,
+          username: 'Student',
+          email: 'student@example.com',
+          password: passwordHash,
+          auth_token_version: 4,
+          deactivated_at: new Date(),
+          reactivation_deadline: reactivationDeadline,
+          retention_expires_at: new Date('2031-07-30T00:00:00.000Z'),
+        }],
+      };
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  try {
+    const eligible = createMockResponse();
+    await login(
+      { body: { email: 'student@example.com', password: 'secret123' } },
+      eligible,
+    );
+    assert.equal(eligible.statusCode, 423);
+    assert.equal(eligible.body.code, 'ACCOUNT_REACTIVATION_REQUIRED');
+    assert.ok(eligible.body.reactivation_token);
+
+    reactivationDeadline = new Date(Date.now() - 1000);
+    const expired = createMockResponse();
+    await login(
+      { body: { email: 'student@example.com', password: 'secret123' } },
+      expired,
+    );
+    assert.equal(expired.statusCode, 423);
+    assert.equal(expired.body.code, 'ACCOUNT_REACTIVATION_EXPIRED');
+    assert.equal(expired.body.reactivation_token, undefined);
+  } finally {
+    pool.query = originalQuery;
+  }
+});
+
+test('password reset lookup excludes accounts beyond reactivation deadline', async () => {
+  const originalQuery = pool.query;
+  let lifecycleFilterSeen = false;
+  pool.query = async (sql) => {
+    if (sql.includes('information_schema.columns')) {
+      return { rows: [{ has_auth_email_tokens: true }] };
+    }
+    if (sql.includes('FROM users') && sql.includes('LOWER(email)')) {
+      lifecycleFilterSeen = sql.includes('reactivation_deadline > NOW()');
+      return { rows: [] };
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  try {
+    const res = createMockResponse();
+    await requestPasswordReset(
+      { body: { email: 'expired@example.com' } },
+      res,
+    );
+    assert.equal(res.statusCode, 200);
+    assert.equal(lifecycleFilterSeen, true);
+  } finally {
+    pool.query = originalQuery;
+  }
+});
+
 test('email verification confirm consumes a code and returns JSON success', async () => {
   const res = createMockResponse();
   const code = '123456';
