@@ -1,6 +1,8 @@
+import axios from 'axios';
 import nodemailer from 'nodemailer';
 
 const DEFAULT_SMTP_PORT = 587;
+const BREVO_SEND_EMAIL_URL = 'https://api.brevo.com/v3/smtp/email';
 
 function parseBoolean(value, fallback) {
   if (value == null || String(value).trim() === '') {
@@ -42,6 +44,22 @@ function mailFrom() {
   );
 }
 
+function brevoApiKey() {
+  return String(process.env.BREVO_API_KEY ?? '').trim();
+}
+
+function parseMailbox(value) {
+  const raw = String(value ?? '').trim();
+  const match = raw.match(/^(.*?)<([^<>]+)>$/);
+  if (!match) {
+    return { email: raw };
+  }
+
+  const name = match[1].trim().replace(/^["']|["']$/g, '');
+  const email = match[2].trim();
+  return name ? { name, email } : { email };
+}
+
 function createTransporter() {
   const config = smtpConfig();
   if (!config) {
@@ -49,6 +67,41 @@ function createTransporter() {
   }
 
   return nodemailer.createTransport(config);
+}
+
+async function sendWithBrevoApi(message, apiKey) {
+  try {
+    const response = await axios.post(
+      BREVO_SEND_EMAIL_URL,
+      {
+        sender: parseMailbox(mailFrom()),
+        to: [parseMailbox(message.to)],
+        subject: message.subject,
+        textContent: message.text,
+        htmlContent: message.html,
+      },
+      {
+        headers: {
+          accept: 'application/json',
+          'api-key': apiKey,
+          'content-type': 'application/json',
+        },
+        timeout: 15000,
+      },
+    );
+
+    return {
+      accepted: [message.to],
+      provider: 'brevo-api',
+      messageId: response.data?.messageId,
+    };
+  } catch (error) {
+    const status = error?.response?.status;
+    const wrapped = new Error('Brevo email API request failed');
+    wrapped.code = status ? `BREVO_API_${status}` : error?.code;
+    wrapped.cause = error;
+    throw wrapped;
+  }
 }
 
 function escapeHtml(value) {
@@ -61,6 +114,11 @@ function escapeHtml(value) {
 }
 
 async function sendMail(message) {
+  const apiKey = brevoApiKey();
+  if (apiKey) {
+    return sendWithBrevoApi(message, apiKey);
+  }
+
   const transporter = createTransporter();
 
   if (!transporter) {
