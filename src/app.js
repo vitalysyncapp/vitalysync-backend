@@ -13,6 +13,7 @@ import { createCorsOptions } from './config/cors.config.js';
 import { rateLimitConfig } from './config/rateLimit.config.js';
 import { rateLimiters } from './middleware/rateLimit.middleware.js';
 import { logApiError } from './utils/errorLogging.js';
+import { checkReadiness } from './services/readiness.service.js';
 import adaptiveRoutes from './routes/adaptive.routes.js';
 import accountRoutes from './routes/account.routes.js';
 import authRoutes from './routes/auth.routes.js';
@@ -46,6 +47,14 @@ app.get('/api/health', (_req, res) => {
     status: 'ok',
     service: 'vitalysync-backend',
     timestamp: new Date().toISOString()
+  });
+});
+app.get('/api/ready', async (_req, res) => {
+  const isReady = await checkReadiness();
+  res.status(isReady ? 200 : 503).json({
+    status: isReady ? 'ready' : 'not_ready',
+    service: 'vitalysync-backend',
+    timestamp: new Date().toISOString(),
   });
 });
 app.use('/api', rateLimiters.perimeter);
