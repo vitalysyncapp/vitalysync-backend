@@ -8,6 +8,7 @@ import {
   requireAuth
 } from './middleware/auth.middleware.js';
 import { attachRequestContext } from './middleware/requestContext.middleware.js';
+import { resolveRequestLocale } from './middleware/locale.middleware.js';
 import { createCorsOptions } from './config/cors.config.js';
 import { rateLimitConfig } from './config/rateLimit.config.js';
 import { rateLimiters } from './middleware/rateLimit.middleware.js';
@@ -34,6 +35,7 @@ app.disable('x-powered-by');
 app.set('trust proxy', rateLimitConfig.trustProxyHops);
 
 app.use(attachRequestContext);
+app.use(resolveRequestLocale);
 app.use(helmet());
 app.use(cors(createCorsOptions()));
 app.use(express.json({ limit: '100kb' }));

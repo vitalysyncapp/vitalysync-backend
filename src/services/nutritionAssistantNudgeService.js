@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { localizeNutritionNudge } from '../i18n/generatedCopy.js';
 
 import { calculateTotals, toNumber } from './nutrition.service.js';
 import { analyzeNutritionMealPatterns } from './nutritionPatternService.js';
@@ -695,6 +696,7 @@ export async function buildNutritionAssistantNudgeResponse({
   recentEvents = [],
   now = new Date(),
   useAi = true,
+  locale = 'en',
   aiEnhancer = enhanceNutritionAssistantNudge
 }) {
   const deterministic = buildDeterministicNutritionAssistantNudge({
@@ -705,19 +707,19 @@ export async function buildNutritionAssistantNudgeResponse({
   });
 
   if (!deterministic || !useAi) {
-    return deterministic;
+    return localizeNutritionNudge(deterministic, locale);
   }
 
   try {
     const selection = await aiEnhancer(deterministic);
     const safe = resolveCuratedNutritionSelection(deterministic, selection);
     if (safe) {
-      return safe;
+      return localizeNutritionNudge(safe, locale);
     }
 
     throw new Error('AI nutrition nudge failed deterministic validation');
   } catch (error) {
-    return {
+    return localizeNutritionNudge({
       ...deterministic,
       metadata: {
         ...deterministic.metadata,
@@ -725,7 +727,7 @@ export async function buildNutritionAssistantNudgeResponse({
         ai_fallback: true,
         ai_error: 'curated_selection_unavailable'
       }
-    };
+    }, locale);
   }
 }
 
@@ -835,7 +837,7 @@ async function loadRecentNutritionFeedback(client, userId) {
 export async function getNutritionAssistantNudge(
   client,
   userId,
-  { date = safeDateKey(), useAi = true } = {}
+  { date = safeDateKey(), useAi = true, locale = 'en' } = {}
 ) {
   const recentSummaries = await loadNutritionWindow(client, userId, date);
   const summary = recentSummaries[recentSummaries.length - 1];
@@ -846,6 +848,7 @@ export async function getNutritionAssistantNudge(
     recentSummaries,
     recentEvents,
     now: new Date(`${date}T12:00:00.000Z`),
-    useAi
+    useAi,
+    locale
   });
 }

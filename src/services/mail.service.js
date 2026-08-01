@@ -81,31 +81,53 @@ async function sendMail(message) {
   });
 }
 
+export function buildVerificationEmail({
+  username,
+  verificationCode,
+  expiresInMinutes = 10,
+  locale = 'en',
+}) {
+  const isFilipino = locale === 'fil' || locale === 'tl';
+  const displayName = String(username ?? '').trim() || (isFilipino ? 'kaibigan' : 'there');
+  const subject = isFilipino
+    ? 'I-verify ang VitalySync email mo'
+    : 'Verify your VitalySync email';
+  const greeting = `Hi ${displayName},`;
+  const instruction = isFilipino
+    ? 'I-enter ang verification code na ito sa VitalySync:'
+    : 'Enter this verification code in VitalySync:';
+  const expiry = isFilipino
+    ? `Mag-e-expire ang code na ito sa loob ng ${expiresInMinutes} minuto at isang beses lang magagamit.`
+    : `This code expires in ${expiresInMinutes} minutes and can only be used once.`;
+  const safety = isFilipino
+    ? 'Kung hindi ikaw ang gumawa o nag-update ng VitalySync account, puwede mong i-ignore ang email na ito.'
+    : 'If you did not create or update a VitalySync account, you can ignore this email.';
+  return {
+    subject,
+    text: [greeting, '', instruction, String(verificationCode), '', expiry, '', safety].join('\n'),
+    html: `
+      <p>${escapeHtml(greeting)}</p>
+      <p>${escapeHtml(instruction)}</p>
+      <p style="font-size: 30px; font-weight: 700; letter-spacing: 8px;">${escapeHtml(verificationCode)}</p>
+      <p>${escapeHtml(expiry)}</p>
+      <p>${escapeHtml(safety)}</p>
+    `,
+  };
+}
+
 async function sendVerificationEmail({
   to,
   username,
   verificationCode,
   expiresInMinutes = 10,
+  locale = 'en',
 }) {
-  const displayName = String(username ?? '').trim() || 'there';
-  const subject = 'Verify your VitalySync email';
-  const text = [
-    `Hi ${displayName},`,
-    '',
-    'Enter this verification code in VitalySync:',
-    String(verificationCode),
-    '',
-    `This code expires in ${expiresInMinutes} minutes and can only be used once.`,
-    '',
-    'If you did not create or update a VitalySync account, you can ignore this email.',
-  ].join('\n');
-  const html = `
-    <p>Hi ${escapeHtml(displayName)},</p>
-    <p>Enter this verification code in VitalySync:</p>
-    <p style="font-size: 30px; font-weight: 700; letter-spacing: 8px;">${escapeHtml(verificationCode)}</p>
-    <p>This code expires in ${escapeHtml(expiresInMinutes)} minutes and can only be used once.</p>
-    <p>If you did not create or update a VitalySync account, you can ignore this email.</p>
-  `;
+  const { subject, text, html } = buildVerificationEmail({
+    username,
+    verificationCode,
+    expiresInMinutes,
+    locale,
+  });
 
   return sendMail({
     to,
@@ -115,30 +137,53 @@ async function sendVerificationEmail({
   });
 }
 
+export function buildPasswordResetEmail({
+  username,
+  resetCode,
+  expiresInMinutes = 10,
+  locale = 'en',
+}) {
+  const isFilipino = locale === 'fil' || locale === 'tl';
+  const displayName = String(username ?? '').trim() || (isFilipino ? 'kaibigan' : 'there');
+  const subject = isFilipino
+    ? 'I-reset ang VitalySync password mo'
+    : 'Reset your VitalySync password';
+  const greeting = `Hi ${displayName},`;
+  const instruction = isFilipino
+    ? 'I-enter ang password reset code na ito sa VitalySync:'
+    : 'Enter this password reset code in VitalySync:';
+  const expiry = isFilipino
+    ? `Mag-e-expire ang code na ito sa loob ng ${expiresInMinutes} minuto at isang beses lang magagamit.`
+    : `This code expires in ${expiresInMinutes} minutes and can only be used once.`;
+  const safety = isFilipino
+    ? 'Kung hindi ka humiling ng password reset, puwede mong i-ignore ang email na ito.'
+    : 'If you did not request a password reset, you can ignore this email.';
+  return {
+    subject,
+    text: [greeting, '', instruction, String(resetCode), '', expiry, safety].join('\n'),
+    html: `
+      <p>${escapeHtml(greeting)}</p>
+      <p>${escapeHtml(instruction)}</p>
+      <p style="font-size: 30px; font-weight: 700; letter-spacing: 8px;">${escapeHtml(resetCode)}</p>
+      <p>${escapeHtml(expiry)}</p>
+      <p>${escapeHtml(safety)}</p>
+    `,
+  };
+}
+
 async function sendPasswordResetEmail({
   to,
   username,
   resetCode,
   expiresInMinutes = 10,
+  locale = 'en',
 }) {
-  const displayName = String(username ?? '').trim() || 'there';
-  const subject = 'Reset your VitalySync password';
-  const text = [
-    `Hi ${displayName},`,
-    '',
-    'Enter this password reset code in VitalySync:',
-    String(resetCode),
-    '',
-    `This code expires in ${expiresInMinutes} minutes and can only be used once.`,
-    'If you did not request a password reset, you can ignore this email.',
-  ].join('\n');
-  const html = `
-    <p>Hi ${escapeHtml(displayName)},</p>
-    <p>Enter this password reset code in VitalySync:</p>
-    <p style="font-size: 30px; font-weight: 700; letter-spacing: 8px;">${escapeHtml(resetCode)}</p>
-    <p>This code expires in ${escapeHtml(expiresInMinutes)} minutes and can only be used once.</p>
-    <p>If you did not request a password reset, you can ignore this email.</p>
-  `;
+  const { subject, text, html } = buildPasswordResetEmail({
+    username,
+    resetCode,
+    expiresInMinutes,
+    locale,
+  });
 
   return sendMail({
     to,

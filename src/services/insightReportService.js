@@ -3,6 +3,7 @@ import {
   formatDateOnly,
   getWeekStartDate
 } from './burnoutScoringEngine.js';
+import { localizeInsightReport } from '../i18n/insightReportCopy.js';
 
 const REPORT_FIELDS = `
   insight_report_id,
@@ -94,7 +95,11 @@ function formatReportRow(row) {
   };
 }
 
-export async function listInsightReports(client, userId, { limit = 30 } = {}) {
+export async function listInsightReports(
+  client,
+  userId,
+  { limit = 30, locale = 'en' } = {}
+) {
   const result = await client.query(
     `SELECT ${REPORT_FIELDS}
      FROM user_insight_reports
@@ -104,13 +109,15 @@ export async function listInsightReports(client, userId, { limit = 30 } = {}) {
     [userId, limit]
   );
 
-  return result.rows.map(formatReportRow);
+  return result.rows
+    .map(formatReportRow)
+    .map((report) => localizeInsightReport(report, locale));
 }
 
 export async function refreshInsightReports(
   client,
   userId,
-  { date = previousUtcDateKey() } = {}
+  { date = previousUtcDateKey(), locale = 'en' } = {}
 ) {
   const normalizedDate = formatDateOnly(date);
   const reports = [];
@@ -145,7 +152,7 @@ export async function refreshInsightReports(
     }
   }
 
-  return reports;
+  return reports.map((report) => localizeInsightReport(report, locale));
 }
 
 async function buildDailyReport(client, userId, date) {

@@ -285,6 +285,7 @@ test('multipart nutrition upload rejects fake images and parsed user mismatches'
     assert.equal(unsupportedResponse.status, 415);
     assert.deepEqual(await unsupportedResponse.json(), {
       message: 'Use a JPEG, PNG, or WebP food photo',
+      code: 'REQUEST_ERROR',
     });
   });
 });
@@ -312,6 +313,7 @@ test('multipart nutrition upload rejects oversized food photos clearly', async (
     assert.equal(response.status, 413);
     assert.deepEqual(await response.json(), {
       message: 'Food photo must be smaller than 8 MB',
+      code: 'PAYLOAD_TOO_LARGE',
     });
   });
 });
@@ -330,6 +332,7 @@ test('oversized JSON bodies fail before auth controller work', async () => {
     assert.equal(response.status, 413);
     assert.deepEqual(await response.json(), {
       message: 'Request body is too large',
+      code: 'PAYLOAD_TOO_LARGE',
     });
   });
 });

@@ -9,7 +9,7 @@ import {
 import { toUserFacingNudgeSeverity } from './nudgeSeverityPolicy.js';
 
 const DEFAULT_OPENAI_NUDGE_MODEL = 'gpt-5.4-mini';
-const PROMPT_VERSION = 'ai_nudge_v4_copy_policy';
+const PROMPT_VERSION = 'ai_nudge_v5_locale';
 const MAX_TITLE_LENGTH = NUDGE_COPY_LIMITS.title;
 const MAX_MESSAGE_LENGTH = NUDGE_COPY_LIMITS.message;
 const MAX_WHY_LENGTH = NUDGE_COPY_LIMITS.reason;
@@ -171,7 +171,8 @@ export function buildAiContext(
   recommendation,
   summary,
   preferences,
-  personalization = null
+  personalization = null,
+  locale = 'en'
 ) {
   const window7 = pickWindow(summary, 7);
   const window14 = pickWindow(summary, 14);
@@ -244,7 +245,9 @@ export function buildAiContext(
       use_one_concrete_action: true,
       keep_behavioral_and_small: true,
       do_not_reference_email_age_or_gender: true,
-      output_language: 'English'
+      output_language: locale === 'fil'
+        ? 'Conversational Taglish (Filipino), with familiar English wellness terms'
+        : 'English'
     }
   };
 }
@@ -298,14 +301,15 @@ export async function enhanceNudgeRecommendation(
   client,
   userId,
   recommendation,
-  { summary, preferences, personalization = null }
+  { summary, preferences, personalization = null, locale = 'en' }
 ) {
   const model = process.env.OPENAI_NUDGE_MODEL || DEFAULT_OPENAI_NUDGE_MODEL;
   const context = buildAiContext(
     recommendation,
     summary,
     preferences,
-    personalization
+    personalization,
+    locale
   );
 
   try {
@@ -319,7 +323,7 @@ export async function enhanceNudgeRecommendation(
             {
               type: 'input_text',
               text:
-                'You write short, human wellness nudges for VitalySync. Preserve deterministic priority, trigger, focus, and user-facing severity. Never show the words critical or urgent; use needs support for the strongest state. Do not diagnose burnout and do not invent data. Start the message with the username followed by a comma when one is available, and use that username exactly once across the full output. Use at most one subtle profile detail only when useful. Do not mention email, age, or gender. Give one concrete action and at most one short reason. Return no more than one action step, and make it restate the same action instead of adding another. Keep the message at 140 characters or fewer. Sound warm, direct, natural, and non-clinical. Avoid hype, promises, generic lectures, and unsupported claims. Return JSON only.'
+                'You write short, human wellness nudges for VitalySync. Preserve deterministic priority, trigger, focus, and user-facing severity. Never show the words critical or urgent; use needs support for the strongest state. Do not diagnose burnout and do not invent data. Start the message with the username followed by a comma when one is available, and use that username exactly once across the full output. Use at most one subtle profile detail only when useful. Do not mention email, age, or gender. Give one concrete action and at most one short reason. Return no more than one action step, and make it restate the same action instead of adding another. Keep the message at 140 characters or fewer. Sound warm, direct, natural, and non-clinical. Avoid hype, promises, generic lectures, and unsupported claims. Follow guardrails.output_language exactly; for Filipino use natural conversational Taglish and keep common wellness and app terms in English. Return JSON only.'
             }
           ]
         },
@@ -426,7 +430,7 @@ export async function enhanceNudgeRecommendations(
   client,
   userId,
   recommendations,
-  { summary, preferences, personalization = null, enhanceThrottled = false }
+  { summary, preferences, personalization = null, locale = 'en', enhanceThrottled = false }
 ) {
   const enhanced = [];
 
@@ -440,7 +444,8 @@ export async function enhanceNudgeRecommendations(
       await enhanceNudgeRecommendation(client, userId, recommendation, {
         summary,
         preferences,
-        personalization
+        personalization,
+        locale
       })
     );
   }

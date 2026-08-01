@@ -555,7 +555,8 @@ export async function getAssistantNutritionNudge(req, res) {
 
     const insight = await getNutritionAssistantNudgeForUser(pool, userId, {
       date: logDate,
-      useAi
+      useAi,
+      locale: req.locale
     });
 
     return res.status(200).json(insight);

@@ -9,7 +9,7 @@ export async function exportUserReport(req, res) {
       return res.status(400).json({ message: 'User ID is required' });
     }
 
-    const buffer = await generateUserReportDocx(userId);
+    const buffer = await generateUserReportDocx(userId, { locale: req.locale });
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', 'attachment; filename="Wellness_Report.docx"');

@@ -9,6 +9,7 @@ import {
   classifyReportMetric,
 } from '../src/services/reportInsights.service.js';
 import { buildReportMetrics } from '../src/services/reportMetrics.service.js';
+import { localizeReportInsights } from '../src/i18n/reportCopy.js';
 
 const NOW = new Date('2026-07-26T12:00:00.000Z');
 
@@ -142,4 +143,25 @@ test('report insights describe table values and keep recommendations last in the
   assert.match(fontTableXml, /w:font w:name="Inter"[\s\S]*?w:embedRegular/);
   assert.ok(embeddedFont);
   assert.ok((await embeddedFont.async('nodebuffer')).length > 0);
+});
+
+test('Filipino report document localizes headings, dates, and deterministic guidance', async () => {
+  const metrics = sampleMetrics();
+  const insights = localizeReportInsights(buildReportInsights(metrics), 'fil');
+  const buffer = await buildUserReportDocx({
+    profile: { user: { username: 'Sample User', gender: 'Other', role: 'Student' } },
+    metrics,
+    insights,
+    reportDate: NOW,
+    locale: 'fil',
+  });
+  const zip = await JSZip.loadAsync(buffer);
+  const documentXml = await zip.file('word/document.xml').async('string');
+
+  assert.match(documentXml, /Impormasyon ng user/);
+  assert.match(documentXml, /Petsa ng report/);
+  assert.match(documentXml, /Buod ng report/);
+  assert.match(documentXml, /Mga rekomendasyon/);
+  assert.match(documentXml, /Protektahan ang recovery time/);
+  assert.match(documentXml, /Hulyo 26, 2026/);
 });

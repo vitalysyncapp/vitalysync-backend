@@ -1,4 +1,8 @@
 import { enhanceNudgeRecommendations } from './aiNudgeService.js';
+import {
+  localizeAdaptiveSummary,
+  localizeNudgeRecommendation,
+} from '../i18n/generatedCopy.js';
 import { getBurnoutPatternSummary } from './burnoutPatternService.js';
 import { validateNudgeCopy } from './nudgeCopyPolicy.js';
 import {
@@ -915,7 +919,7 @@ async function attachShownEvent(client, userId, recommendation, preferences) {
 export async function getAdaptiveNudgeRecommendations(
   client,
   userId,
-  { limit = 3, recordShown = true, endDate, useAi = false } = {}
+  { limit = 3, recordShown = true, endDate, useAi = false, locale = 'en' } = {}
 ) {
   const normalizedLimit = boundedLimit(limit);
   const summary = await getBurnoutPatternSummary(client, userId, { endDate });
@@ -945,26 +949,31 @@ export async function getAdaptiveNudgeRecommendations(
       summary,
       preferences,
       personalization,
+      locale,
       enhanceThrottled: !recordShown
     })
     : personalizedRanked;
+  const localizedRecommendations = recommendations.map((recommendation) =>
+    localizeNudgeRecommendation(recommendation, locale)
+  );
+  const localizedSummary = localizeAdaptiveSummary(summary, locale);
 
-  if (!recordShown || recommendations.length === 0) {
+  if (!recordShown || localizedRecommendations.length === 0) {
     return {
-      summary,
-      recommendations
+      summary: localizedSummary,
+      recommendations: localizedRecommendations
     };
   }
 
   const primary = await attachShownEvent(
     client,
     userId,
-    recommendations[0],
+    localizedRecommendations[0],
     preferences
   );
 
   return {
-    summary,
-    recommendations: [primary, ...recommendations.slice(1)]
+    summary: localizedSummary,
+    recommendations: [primary, ...localizedRecommendations.slice(1)]
   };
 }

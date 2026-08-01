@@ -449,7 +449,10 @@ export async function listInsightReports(req, res) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const reports = await listInsightReportsForUser(pool, userId, { limit });
+    const reports = await listInsightReportsForUser(pool, userId, {
+      limit,
+      locale: req.locale
+    });
 
     return res.status(200).json({ reports });
   } catch (error) {
@@ -479,7 +482,8 @@ export async function refreshInsightReports(req, res) {
     }
 
     const reports = await refreshInsightReportsForUser(pool, userId, {
-      date: date ?? undefined
+      date: date ?? undefined,
+      locale: req.locale
     });
 
     return res.status(200).json({
@@ -523,7 +527,8 @@ export async function getNudgeRecommendations(req, res) {
     const result = await getAdaptiveNudgeRecommendations(pool, userId, {
       limit,
       recordShown,
-      useAi
+      useAi,
+      locale: req.locale
     });
     const primaryRecommendation = result.recommendations[0] ?? null;
 
@@ -805,6 +810,12 @@ export async function createNotificationEvent(req, res) {
     return res.status(400).json({ message: 'Valid metadata object is required' });
   }
 
+  const localizedMetadata = {
+    ...metadata,
+    locale: req.locale,
+    message_key: metadata.message_key ?? `notification.${notificationType}`
+  };
+
   try {
     const userExists = await ensureUserExists(pool, userId);
     if (!userExists) {
@@ -875,7 +886,7 @@ export async function createNotificationEvent(req, res) {
         scheduledFor,
         sentAt,
         status,
-        JSON.stringify(metadata)
+        JSON.stringify(localizedMetadata)
       ]
     );
 

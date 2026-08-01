@@ -133,6 +133,7 @@ export async function fetchEnvironmentSnapshot({ lat, lon, userId = null }) {
       lon: toNumber(weatherData.coord?.lon, lon)
     },
     weather: {
+      condition_code: toNumber(weather.id, 0),
       main: String(weather.main ?? 'Unknown'),
       description: String(weather.description ?? 'No description available'),
       icon: String(weather.icon ?? ''),

@@ -208,7 +208,7 @@ function remainingMinutes(expiresAt) {
   return Math.max(1, Math.ceil((expiresAt.getTime() - Date.now()) / (60 * 1000)));
 }
 
-async function sendVerificationEmailForUser(user) {
+async function sendVerificationEmailForUser(user, locale = 'en') {
   const code = await createEmailVerificationCode({
     userId: user.user_id,
     email: user.email,
@@ -219,10 +219,11 @@ async function sendVerificationEmailForUser(user) {
     username: user.username,
     verificationCode: code.code,
     expiresInMinutes: remainingMinutes(code.expiresAt),
+    locale,
   });
 }
 
-async function sendPasswordResetEmailForUser(user) {
+async function sendPasswordResetEmailForUser(user, locale = 'en') {
   const code = await createPasswordResetCode({
     userId: user.user_id,
     email: user.email,
@@ -233,6 +234,7 @@ async function sendPasswordResetEmailForUser(user) {
     username: user.username,
     resetCode: code.code,
     expiresInMinutes: remainingMinutes(code.expiresAt),
+    locale,
   });
 }
 
@@ -245,7 +247,7 @@ function queueVerificationEmail(req, user, schema) {
     return;
   }
 
-  sendVerificationEmailForUser(user).catch((error) => {
+  sendVerificationEmailForUser(user, req.locale).catch((error) => {
     logApiError(req, 'Email verification send error', error);
   });
 }
@@ -255,7 +257,7 @@ function queuePasswordResetEmail(req, user, schema) {
     return;
   }
 
-  sendPasswordResetEmailForUser(user).catch((error) => {
+  sendPasswordResetEmailForUser(user, req.locale).catch((error) => {
     logApiError(req, 'Password reset send error', error);
   });
 }

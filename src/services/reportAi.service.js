@@ -9,6 +9,7 @@ function cleanText(value, maxLength) {
 export async function generateReportAiContent(metrics, {
   apiKey = process.env.OPENAI_API_KEY,
   model = process.env.OPENAI_NUDGE_MODEL || 'gpt-5.4-mini',
+  locale = 'en',
 } = {}) {
   if (!apiKey) return null;
 
@@ -28,7 +29,7 @@ export async function generateReportAiContent(metrics, {
       messages: [
         {
           role: 'system',
-          content: 'Return valid JSON. Use supportive, non-clinical wellness language. Do not diagnose, infer missing facts, or overstate certainty.',
+          content: `Return valid JSON. Use supportive, non-clinical wellness language. Do not diagnose, infer missing facts, or overstate certainty. Write in ${locale === 'fil' ? 'natural conversational Taglish (Filipino), keeping familiar English wellness and technical terms' : 'English'}.`,
         },
         {
           role: 'user',

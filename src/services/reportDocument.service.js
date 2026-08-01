@@ -19,6 +19,7 @@ import {
 import { readFile } from 'node:fs/promises';
 
 import { classifyReportMetric } from './reportInsights.service.js';
+import { reportText } from '../i18n/reportCopy.js';
 
 const PAGE_WIDTH = 12240;
 const PAGE_HEIGHT = 15840;
@@ -119,6 +120,7 @@ function plainCell(text, width, alignment = AlignmentType.LEFT) {
 function semanticCell(valueText, metric, value, width, {
   appendLabel = true,
   compactCoverageLabel = false,
+  locale = 'en',
 } = {}) {
   const indicator = classifyReportMetric(metric, value);
   const palette = COLORS[indicator.level];
@@ -129,9 +131,9 @@ function semanticCell(valueText, metric, value, width, {
     high: 'Very limited',
     unknown: 'No data',
   };
-  const label = compactCoverageLabel
+  const label = reportText(compactCoverageLabel
     ? coverageLabels[indicator.level]
-    : indicator.label;
+    : indicator.label, locale);
 
   return tableCell(
     width,
@@ -173,7 +175,7 @@ function format(value, suffix = '') {
   return value == null ? 'N/A' : `${value}${suffix}`;
 }
 
-function burnoutTable(metrics) {
+function burnoutTable(metrics, locale) {
   const widths = [4800, 2200, TABLE_WIDTH - 7000];
   const latest = metrics.latestBurnout;
   const rows = latest
@@ -187,103 +189,103 @@ function burnoutTable(metrics) {
     : [['Latest result', 'N/A', 'burnoutScore', null]];
 
   return reportTable(
-    ['Metric', 'Value', 'Indicator'],
+    ['Metric', 'Value', 'Indicator'].map((item) => reportText(item, locale)),
     widths,
     rows.map(([label, valueText, metric, value]) => {
       const indicator = classifyReportMetric(metric, value);
       return new TableRow({
         cantSplit: true,
         children: [
-          plainCell(label, widths[0]),
-          plainCell(valueText, widths[1], AlignmentType.CENTER),
-          semanticCell(indicator.label, metric, value, widths[2], { appendLabel: false }),
+          plainCell(reportText(label, locale), widths[0]),
+          plainCell(reportText(valueText, locale), widths[1], AlignmentType.CENTER),
+          semanticCell(reportText(indicator.label, locale), metric, value, widths[2], { appendLabel: false, locale }),
         ],
       });
     }),
   );
 }
 
-function wellnessTable(metrics) {
+function wellnessTable(metrics, locale) {
   const widths = [2700, 1900, 1900, 1900, TABLE_WIDTH - 8400];
   const rows = PERIOD_ROWS.map(([key, label]) => {
     const period = metrics.wellness[key];
     return new TableRow({
       cantSplit: true,
       children: [
-        plainCell(label, widths[0]),
-        semanticCell(format(period.sleep, ' h'), 'sleep', period.sleep, widths[1]),
-        semanticCell(format(period.mood, '/5'), 'mood', period.mood, widths[2]),
-        semanticCell(format(period.energy, '/5'), 'energy', period.energy, widths[3]),
+        plainCell(reportText(label, locale), widths[0]),
+        semanticCell(format(period.sleep, ' h'), 'sleep', period.sleep, widths[1], { locale }),
+        semanticCell(format(period.mood, '/5'), 'mood', period.mood, widths[2], { locale }),
+        semanticCell(format(period.energy, '/5'), 'energy', period.energy, widths[3], { locale }),
         semanticCell(
           `${period.count}/${period.expectedDays}`,
           'coverage',
           period.count / period.expectedDays,
           widths[4],
-          { compactCoverageLabel: true },
+          { compactCoverageLabel: true, locale },
         ),
       ],
     });
   });
 
   return reportTable(
-    ['Period', 'Sleep', 'Mood', 'Energy', 'Logged days'],
+    ['Period', 'Sleep', 'Mood', 'Energy', 'Logged days'].map((item) => reportText(item, locale)),
     widths,
     rows,
   );
 }
 
-function weeklyPulseTable(metrics) {
+function weeklyPulseTable(metrics, locale) {
   const widths = [1800, 1450, 1450, 1450, 1450, 1450, TABLE_WIDTH - 9050];
   const rows = PERIOD_ROWS.map(([key, label]) => {
     const period = metrics.pulse[key];
     return new TableRow({
       cantSplit: true,
       children: [
-        plainCell(label, widths[0]),
-        semanticCell(format(period.pressure, '/5'), 'stress', period.pressure, widths[1]),
-        semanticCell(format(period.recoveryRest, '/5'), 'likertHighGood', period.recoveryRest, widths[2]),
-        semanticCell(format(period.detachment, '/5'), 'stress', period.detachment, widths[3]),
-        semanticCell(format(period.productivityFocus, '/5'), 'likertHighGood', period.productivityFocus, widths[4]),
-        semanticCell(format(period.accomplishment, '/5'), 'likertHighGood', period.accomplishment, widths[5]),
+        plainCell(reportText(label, locale), widths[0]),
+        semanticCell(format(period.pressure, '/5'), 'stress', period.pressure, widths[1], { locale }),
+        semanticCell(format(period.recoveryRest, '/5'), 'likertHighGood', period.recoveryRest, widths[2], { locale }),
+        semanticCell(format(period.detachment, '/5'), 'stress', period.detachment, widths[3], { locale }),
+        semanticCell(format(period.productivityFocus, '/5'), 'likertHighGood', period.productivityFocus, widths[4], { locale }),
+        semanticCell(format(period.accomplishment, '/5'), 'likertHighGood', period.accomplishment, widths[5], { locale }),
         semanticCell(
           `${period.count}/${period.expectedPulses}`,
           'coverage',
           period.count / period.expectedPulses,
           widths[6],
-          { compactCoverageLabel: true },
+          { compactCoverageLabel: true, locale },
         ),
       ],
     });
   });
 
   return reportTable(
-    ['Period', 'Pressure', 'Recovery', 'Detachment', 'Focus', 'Accomplishment', 'Pulses'],
+    ['Period', 'Pressure', 'Recovery', 'Detachment', 'Focus', 'Accomplishment', 'Pulses'].map((item) => reportText(item, locale)),
     widths,
     rows,
   );
 }
 
-function activityTable(metrics) {
+function activityTable(metrics, locale) {
   const widths = [2400, 2100, 2300, 2300, TABLE_WIDTH - 9100];
   const rows = PERIOD_ROWS.map(([key, label]) => {
     const period = metrics.activity[key];
     return new TableRow({
       cantSplit: true,
       children: [
-        plainCell(label, widths[0]),
+        plainCell(reportText(label, locale), widths[0]),
         semanticCell(
           format(period.steps),
           'steps',
           period.steps,
           widths[1],
-          { appendLabel: false },
+          { appendLabel: false, locale },
         ),
         semanticCell(
           format(period.activeMinutes, ' min'),
           'activeMinutes',
           period.activeMinutes,
           widths[2],
-          { appendLabel: false },
+          { appendLabel: false, locale },
         ),
         plainCell(format(period.calories), widths[3], AlignmentType.CENTER),
         semanticCell(
@@ -291,59 +293,59 @@ function activityTable(metrics) {
           'coverage',
           period.count / period.expectedDays,
           widths[4],
-          { compactCoverageLabel: true },
+          { compactCoverageLabel: true, locale },
         ),
       ],
     });
   });
 
   return reportTable(
-    ['Period', 'Avg steps/day', 'Avg active time', 'Avg calories/logged day', 'Logged days'],
+    ['Period', 'Avg steps/day', 'Avg active time', 'Avg calories/logged day', 'Logged days'].map((item) => reportText(item, locale)),
     widths,
     rows,
   );
 }
 
-function insightParagraph(text, level) {
+function insightParagraph(text, level, locale) {
   const palette = COLORS[level] ?? COLORS.unknown;
   return bodyParagraph([
-    run('Insight: ', { bold: true, color: '000000' }),
+    run(reportText('Insight: ', locale), { bold: true, color: '000000' }),
     run(text, { color: palette.text }),
   ], { spacing: { before: 180, after: 140, line: 276 }, keepNext: true });
 }
 
-function signalParagraph(item) {
+function signalParagraph(item, locale) {
   const palette = COLORS[item.level] ?? COLORS.unknown;
   return bodyParagraph([
     run('● ', { bold: true, color: palette.text }),
-    run(`${item.label}: `, { bold: true, color: palette.text }),
+    run(`${reportText(item.label, locale)}: `, { bold: true, color: palette.text }),
     run(item.text),
   ], { spacing: { after: 70, line: 264 }, indent: { left: 180, hanging: 180 } });
 }
 
-function signalsBlock(section) {
+function signalsBlock(section, locale) {
   return [
     new Paragraph({
       style: 'ReportSignalHeading',
       keepNext: true,
-      children: [run('Signals', { bold: true, size: 21, color: '000000' })],
+      children: [run(reportText('Signals', locale), { bold: true, size: 21, color: '000000' })],
     }),
-    ...section.signals.map(signalParagraph),
+    ...section.signals.map((item) => signalParagraph(item, locale)),
   ];
 }
 
-function indicatorGuide() {
+function indicatorGuide(locale) {
   return bodyParagraph([
-    run('Indicator guide: ', { bold: true, color: '000000' }),
-    run('Good', { bold: true, color: COLORS.good.text }),
+    run(reportText('Indicator guide: ', locale), { bold: true, color: '000000' }),
+    run(reportText('Good', locale), { bold: true, color: COLORS.good.text }),
     run('  |  '),
-    run('Okay', { bold: true, color: COLORS.okay.text }),
+    run(reportText('Okay', locale), { bold: true, color: COLORS.okay.text }),
     run('  |  '),
-    run('Warning', { bold: true, color: COLORS.warning.text }),
+    run(reportText('Warning', locale), { bold: true, color: COLORS.warning.text }),
     run('  |  '),
-    run('High risk', { bold: true, color: COLORS.high.text }),
+    run(reportText('High risk', locale), { bold: true, color: COLORS.high.text }),
     run('  |  '),
-    run('AI-generated', { bold: true, color: COLORS.ai.text }),
+    run(reportText('AI-generated', locale), { bold: true, color: COLORS.ai.text }),
   ], { alignment: AlignmentType.CENTER, spacing: { after: 240 } });
 }
 
@@ -362,6 +364,7 @@ export async function buildUserReportDocx({
   insights,
   aiContent = null,
   reportDate = new Date(),
+  locale = 'en',
 }) {
   const user = profile?.user ?? {};
   const recommendations = aiContent?.recommendations?.length
@@ -374,60 +377,60 @@ export async function buildUserReportDocx({
     new Paragraph({
       style: 'ReportTitle',
       alignment: AlignmentType.CENTER,
-      children: [run('VitalySync User Wellness Report', { bold: true, size: 36, color: '000000' })],
+      children: [run(reportText('VitalySync User Wellness Report', locale), { bold: true, size: 36, color: '000000' })],
     }),
-    bodyParagraph('A personal summary of logged wellness, burnout, and activity patterns.', {
+    bodyParagraph(reportText('A personal summary of logged wellness, burnout, and activity patterns.', locale), {
       alignment: AlignmentType.CENTER,
       spacing: { after: 180 },
     }),
-    indicatorGuide(),
+    indicatorGuide(locale),
 
-    heading('User information'),
-    bodyParagraph([run('Name: ', { bold: true }), run(user.username ?? 'N/A')], { spacing: { after: 60 } }),
-    bodyParagraph([run('Gender: ', { bold: true }), run(user.gender ?? 'N/A')], { spacing: { after: 60 } }),
-    bodyParagraph([run('Role: ', { bold: true }), run(user.role ?? 'N/A')], { spacing: { after: 60 } }),
+    heading(reportText('User information', locale)),
+    bodyParagraph([run(reportText('Name: ', locale), { bold: true }), run(user.username ?? 'N/A')], { spacing: { after: 60 } }),
+    bodyParagraph([run(reportText('Gender: ', locale), { bold: true }), run(user.gender ?? 'N/A')], { spacing: { after: 60 } }),
+    bodyParagraph([run(reportText('Role: ', locale), { bold: true }), run(user.role ?? 'N/A')], { spacing: { after: 60 } }),
     bodyParagraph([
-      run('Report date: ', { bold: true }),
-      run(reportDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })),
+      run(reportText('Report date: ', locale), { bold: true }),
+      run(reportDate.toLocaleDateString(locale === 'fil' ? 'fil-PH' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' })),
     ]),
 
-    heading('Report overview'),
+    heading(reportText('Report overview', locale)),
     bodyParagraph([run(insights.overview, { color: overviewPalette.text })]),
     ...(aiContent?.highlight
       ? [bodyParagraph([
-          run('AI-generated highlight: ', { bold: true, color: '000000' }),
+          run(reportText('AI-generated highlight: ', locale), { bold: true, color: '000000' }),
           run(aiContent.highlight, { color: COLORS.ai.text }),
         ])]
       : []),
 
-    heading('Burnout status and dimensions'),
-    burnoutTable(metrics),
-    insightParagraph(insights.sections.burnout.insight, insights.sections.burnout.level),
-    ...signalsBlock(insights.sections.burnout),
+    heading(reportText('Burnout status and dimensions', locale)),
+    burnoutTable(metrics, locale),
+    insightParagraph(insights.sections.burnout.insight, insights.sections.burnout.level, locale),
+    ...signalsBlock(insights.sections.burnout, locale),
 
-    heading('Wellness averages'),
-    wellnessTable(metrics),
-    insightParagraph(insights.sections.wellness.insight, insights.sections.wellness.level),
-    ...signalsBlock(insights.sections.wellness),
+    heading(reportText('Wellness averages', locale)),
+    wellnessTable(metrics, locale),
+    insightParagraph(insights.sections.wellness.insight, insights.sections.wellness.level, locale),
+    ...signalsBlock(insights.sections.wellness, locale),
 
-    heading('Weekly pulse context'),
-    weeklyPulseTable(metrics),
-    insightParagraph(insights.sections.pulse.insight, insights.sections.pulse.level),
-    ...signalsBlock(insights.sections.pulse),
+    heading(reportText('Weekly pulse context', locale)),
+    weeklyPulseTable(metrics, locale),
+    insightParagraph(insights.sections.pulse.insight, insights.sections.pulse.level, locale),
+    ...signalsBlock(insights.sections.pulse, locale),
 
-    heading('Exercise and activity'),
-    activityTable(metrics),
-    insightParagraph(insights.sections.activity.insight, insights.sections.activity.level),
-    ...signalsBlock(insights.sections.activity),
+    heading(reportText('Exercise and activity', locale)),
+    activityTable(metrics, locale),
+    insightParagraph(insights.sections.activity.insight, insights.sections.activity.level, locale),
+    ...signalsBlock(insights.sections.activity, locale),
 
     bodyParagraph([
-      run('Important: ', { bold: true }),
-      run('This report supports personal wellness tracking and is not medical advice, a diagnosis, or treatment. Color indicators summarize app-defined patterns and should be read alongside the underlying values and data coverage.'),
+      run(reportText('Important: ', locale), { bold: true }),
+      run(reportText('This report supports personal wellness tracking and is not medical advice, a diagnosis, or treatment. Color indicators summarize app-defined patterns and should be read alongside the underlying values and data coverage.', locale)),
     ], { spacing: { before: 260, after: 160 }, style: 'ReportNote' }),
 
-    heading('Recommendations'),
+    heading(reportText('Recommendations', locale)),
     ...(aiRecommendations
-      ? [bodyParagraph([run('The following suggestions are AI-generated from the aggregated values in this report.', { color: COLORS.ai.text })])]
+      ? [bodyParagraph([run(reportText('The following suggestions are AI-generated from the aggregated values in this report.', locale), { color: COLORS.ai.text })])]
       : []),
     ...recommendations.map((item) => recommendationParagraph(item, aiRecommendations)),
   ];

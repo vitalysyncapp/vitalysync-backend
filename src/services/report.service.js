@@ -4,6 +4,7 @@ import { generateReportAiContent } from './reportAi.service.js';
 import { buildUserReportDocx } from './reportDocument.service.js';
 import { buildReportInsights } from './reportInsights.service.js';
 import { buildReportMetrics } from './reportMetrics.service.js';
+import { localizeReportInsights } from '../i18n/reportCopy.js';
 
 async function loadReportRows(userId) {
   const [logsResult, pulseResult, burnoutResult, exerciseResult] = await Promise.all([
@@ -57,7 +58,7 @@ async function loadReportRows(userId) {
   };
 }
 
-export async function generateUserReportDocx(userId) {
+export async function generateUserReportDocx(userId, { locale = 'en' } = {}) {
   const profile = await getUserProfileSummary(userId);
   if (!profile) {
     throw new Error('User not found');
@@ -66,8 +67,8 @@ export async function generateUserReportDocx(userId) {
   const reportDate = new Date();
   const rows = await loadReportRows(userId);
   const metrics = buildReportMetrics({ ...rows, now: reportDate });
-  const insights = buildReportInsights(metrics);
-  const aiContent = await generateReportAiContent(metrics);
+  const insights = localizeReportInsights(buildReportInsights(metrics), locale);
+  const aiContent = await generateReportAiContent(metrics, { locale });
 
   return buildUserReportDocx({
     profile,
@@ -75,5 +76,6 @@ export async function generateUserReportDocx(userId) {
     insights,
     aiContent,
     reportDate,
+    locale,
   });
 }
