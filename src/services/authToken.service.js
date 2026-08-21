@@ -2,7 +2,7 @@ import crypto from 'crypto';
 
 const TOKEN_VERSION = 'VS1';
 const REACTIVATION_TOKEN_VERSION = 'VS-REACTIVATE1';
-const DEFAULT_EXPIRES_IN_SECONDS = 60 * 60 * 24 * 7;
+const DEFAULT_EXPIRES_IN_SECONDS = 60 * 60 * 24 * 90;
 const DEFAULT_REACTIVATION_GRANT_TTL_MINUTES = 10;
 const MIN_PRODUCTION_SECRET_LENGTH = 32;
 
@@ -91,8 +91,11 @@ function readSignedToken(token) {
 
 export function createAccessToken(user) {
   const now = Math.floor(Date.now() / 1000);
-  const expiresIn = Number(process.env.AUTH_TOKEN_TTL_SECONDS) ||
-    DEFAULT_EXPIRES_IN_SECONDS;
+  const configuredExpiresIn = Number(process.env.AUTH_TOKEN_TTL_SECONDS);
+  const expiresIn =
+    Number.isInteger(configuredExpiresIn) && configuredExpiresIn > 0
+      ? configuredExpiresIn
+      : DEFAULT_EXPIRES_IN_SECONDS;
   const header = {
     alg: 'HS256',
     typ: TOKEN_VERSION
