@@ -1,6 +1,7 @@
 import pool from '../config/db.js';
 
 const BASE_MONTHLY_SAVERS = 3;
+const MAX_RESTORABLE_MISSED_DAYS = 3;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const LEADERBOARD_SECTIONS = new Set(['global', 'area', 'role', 'wellness']);
 const LEADERBOARD_METRICS = new Set(['current', 'month', 'longest']);
@@ -387,7 +388,17 @@ export async function prepareStreakForNewLog(client, {
     savers_used: 0,
   };
 
-  if (!previousLogDate) {
+  // Replayed or backdated logs must not move the streak's date backwards.
+  if (previousLogDate && dayDifference(previousLogDate, currentLogDate) <= 0) {
+    return {
+      updatedStreak,
+      longestStreak,
+      lastLoggedDate: formatDate(previousLogDate),
+      restore,
+    };
+  }
+
+  if (!previousLogDate || updatedStreak <= 0) {
     updatedStreak = 1;
   } else {
     const difference = dayDifference(previousLogDate, currentLogDate);
@@ -399,9 +410,11 @@ export async function prepareStreakForNewLog(client, {
       const saverPeriod = await ensureSaverPeriod(client, userId, currentLogDate);
       const available = formatSaverPeriod(saverPeriod).available_savers;
       const decision = normalizeRestoreDecision(restoreDecision);
+      const canRestore = missingDates.length <= MAX_RESTORABLE_MISSED_DAYS &&
+        available >= missingDates.length;
 
       restore = {
-        required: true,
+        required: canRestore,
         decision,
         missing_dates: missingDates,
         missing_days: missingDates.length,
@@ -410,22 +423,19 @@ export async function prepareStreakForNewLog(client, {
         savers_used: 0,
       };
 
-      if (decision === 'use') {
-        if (available < missingDates.length) {
-          throw new StreakServiceError('Not enough streak savers available', 409, {
-            streak_restore: {
-              ...restore,
-              reason: 'insufficient_savers',
-            },
-          });
-        }
-
+      if (!canRestore) {
+        updatedStreak = 1;
+        restore.reason = missingDates.length > MAX_RESTORABLE_MISSED_DAYS
+          ? 'too_many_missed_days'
+          : 'insufficient_savers';
+      } else if (decision === 'use') {
         await restoreMissingDates(client, {
           userId,
           currentLogDate: currentLogDateText,
           missingDates,
         });
-        updatedStreak += difference;
+        // Savers preserve the prior count; only today's check-in earns a day.
+        updatedStreak += 1;
         restore.savers_used = missingDates.length;
       } else if (decision === 'skip') {
         updatedStreak = 1;

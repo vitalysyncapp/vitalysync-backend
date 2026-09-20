@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   StreakServiceError,
+  formatStreakPayload,
   prepareStreakForNewLog,
   readLeaderboard,
 } from '../src/services/streak.service.js';
@@ -75,7 +76,7 @@ test('streak increments normally on the next logged day', async () => {
   assert.equal(result.restore.required, false);
 });
 
-test('missed day with use spends savers and bridges the streak', async () => {
+test('restoring missed days spends savers but adds only one check-in day', async () => {
   const client = mockClient({ availableSavers: 3 });
   const result = await prepareStreakForNewLog(client, {
     userId: 1,
@@ -92,8 +93,8 @@ test('missed day with use spends savers and bridges the streak', async () => {
     call.sql.includes('INSERT INTO streak_saver_events')
   );
 
-  assert.equal(result.updatedStreak, 7);
-  assert.equal(result.longestStreak, 7);
+  assert.equal(result.updatedStreak, 5);
+  assert.equal(result.longestStreak, 5);
   assert.equal(result.restore.savers_used, 2);
   assert.equal(spendEvents.length, 2);
 });
@@ -139,26 +140,113 @@ test('missed day without a decision asks for manual restore choice', async () =>
   );
 });
 
-test('insufficient savers return a clear restore failure', async () => {
-  const client = mockClient({ availableSavers: 1 });
-
-  await assert.rejects(
-    () =>
-      prepareStreakForNewLog(client, {
+test('unrecoverable gaps reset immediately for every restore decision', async () => {
+  for (const { missedDays, availableSavers, reason } of [
+    { missedDays: 1, availableSavers: 0, reason: 'insufficient_savers' },
+    { missedDays: 2, availableSavers: 1, reason: 'insufficient_savers' },
+    { missedDays: 3, availableSavers: 2, reason: 'insufficient_savers' },
+    { missedDays: 4, availableSavers: 10, reason: 'too_many_missed_days' },
+    { missedDays: 28, availableSavers: 30, reason: 'too_many_missed_days' },
+  ]) {
+    for (const restoreDecision of ['use', 'skip', 'defer']) {
+      const client = mockClient({ availableSavers });
+      const result = await prepareStreakForNewLog(client, {
         userId: 1,
-        logDate: '2026-06-04',
+        logDate: `2026-06-${String(missedDays + 2).padStart(2, '0')}`,
         streakRow: {
           current_streak: 4,
           longest_streak: 8,
           last_logged_date: '2026-06-01',
         },
-        restoreDecision: 'use',
-      }),
-    (error) =>
-      error instanceof StreakServiceError &&
-      error.statusCode === 409 &&
-      error.details.streak_restore.reason === 'insufficient_savers'
-  );
+        restoreDecision,
+      });
+
+      assert.equal(result.updatedStreak, 1);
+      assert.equal(result.longestStreak, 8);
+      assert.equal(result.restore.required, false);
+      assert.equal(result.restore.reason, reason);
+      assert.equal(result.restore.savers_used, 0);
+      assert.equal(client.calls.some((call) =>
+        call.sql.includes('INSERT INTO streak_saver_events')), false);
+    }
+  }
+});
+
+test('one to three missed days consume exactly one saver each and increment once', async () => {
+  for (const missedDays of [1, 2, 3]) {
+    const client = mockClient({ availableSavers: missedDays });
+    const result = await prepareStreakForNewLog(client, {
+      userId: 1,
+      logDate: `2026-06-0${missedDays + 2}`,
+      streakRow: {
+        current_streak: 6,
+        longest_streak: 6,
+        last_logged_date: '2026-06-01',
+      },
+      restoreDecision: 'use',
+    });
+
+    assert.equal(result.updatedStreak, 7);
+    assert.equal(result.longestStreak, 7);
+    assert.equal(result.restore.savers_used, missedDays);
+    assert.deepEqual(
+      client.calls.filter((call) => call.sql.includes('INSERT INTO streak_protected_days'))
+        .map((call) => call.params[1]),
+      Array.from({ length: missedDays }, (_, index) => `2026-06-0${index + 2}`)
+    );
+  }
+});
+
+test('same-day retries and older logs never increment or rewind the streak', async () => {
+  let streakRow = {
+    current_streak: 7,
+    longest_streak: 10,
+    last_logged_date: '2026-06-05',
+  };
+  const client = mockClient();
+
+  for (const logDate of ['2026-06-05', '2026-06-03', '2026-06-05']) {
+    const result = await prepareStreakForNewLog(client, {
+      userId: 1, logDate, streakRow, restoreDecision: 'use',
+    });
+    assert.equal(result.updatedStreak, 7);
+    assert.equal(result.lastLoggedDate, '2026-06-05');
+    assert.equal(result.restore.savers_used, 0);
+    streakRow = {
+      current_streak: result.updatedStreak,
+      longest_streak: result.longestStreak,
+      last_logged_date: result.lastLoggedDate,
+    };
+  }
+  assert.equal(client.calls.length, 0);
+});
+
+test('an already-lost streak starts at one without spending savers', async () => {
+  const client = mockClient();
+  const result = await prepareStreakForNewLog(client, {
+    userId: 1,
+    logDate: '2026-06-04',
+    streakRow: {
+      current_streak: 0, longest_streak: 8, last_logged_date: '2026-06-01',
+    },
+    restoreDecision: 'use',
+  });
+  assert.equal(result.updatedStreak, 1);
+  assert.equal(result.longestStreak, 8);
+  assert.equal(result.restore.required, false);
+  assert.equal(client.calls.length, 0);
+});
+
+test('expired streaks display zero before the next check-in', () => {
+  const streakRow = {
+    current_streak: 7, longest_streak: 10, last_logged_date: '2026-06-01',
+  };
+  assert.equal(formatStreakPayload(streakRow, { now: '2026-06-02' }).current_streak, 7);
+  for (const now of ['2026-06-03', '2026-06-06', '2026-06-30']) {
+    assert.deepEqual(formatStreakPayload(streakRow, { now }), {
+      current_streak: 0, longest_streak: 10, last_logged_date: '2026-06-01',
+    });
+  }
 });
 
 test('leaderboard rows include profile context for suggested avatars', async () => {

@@ -674,7 +674,7 @@ export async function saveDailyLog(req, res) {
              last_logged_date = $4,
              updated_at = NOW()
          WHERE user_id = $1`,
-        [userId, updatedStreak, longestStreak, logDate]
+        [userId, updatedStreak, longestStreak, streakUpdate.lastLoggedDate]
       );
 
       streakRewards = await awardStreakRewardsForLog(client, {
