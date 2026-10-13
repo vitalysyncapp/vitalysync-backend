@@ -1,10 +1,10 @@
+import { loadWellnessSummary } from './wellnessSummary.service.js';
 import pool from '../config/db.js';
 import { getUserProfileSummary } from './onboarding.service.js';
 import { generateReportAiContent } from './reportAi.service.js';
 import { buildUserReportDocx } from './reportDocument.service.js';
 import { buildReportInsights } from './reportInsights.service.js';
 import { buildReportMetrics } from './reportMetrics.service.js';
-import { localizeReportInsights } from '../i18n/reportCopy.js';
 
 async function loadReportRows(userId) {
   const [logsResult, pulseResult, burnoutResult, exerciseResult] = await Promise.all([
@@ -66,8 +66,13 @@ export async function generateUserReportDocx(userId, { locale = 'en' } = {}) {
 
   const reportDate = new Date();
   const rows = await loadReportRows(userId);
-  const metrics = buildReportMetrics({ ...rows, now: reportDate });
-  const insights = localizeReportInsights(buildReportInsights(metrics), locale);
+  const [assessmentRows, wellnessSummary] = await Promise.all([
+    pool.query(`SELECT completed_at, cbi_score, completion_status, instrument_version, scoring_version
+      FROM user_assessments WHERE user_id = $1 ORDER BY completed_at DESC, submission_id DESC`, [userId]),
+    loadWellnessSummary(pool, userId)
+  ]);
+  const metrics = buildReportMetrics({ ...rows, assessments: assessmentRows.rows, wellnessSummary, now: reportDate });
+  const insights = buildReportInsights(metrics);
   const aiContent = await generateReportAiContent(metrics, { locale });
 
   return buildUserReportDocx({

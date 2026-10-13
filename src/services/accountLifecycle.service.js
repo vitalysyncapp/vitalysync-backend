@@ -20,6 +20,7 @@ export const ACCOUNT_LIFECYCLE_CODES = Object.freeze({
 // Keep dependency targets before the rows they reference. Indirect children,
 // such as nutrition_log_items, are removed by their ON DELETE CASCADE.
 export const USER_OWNED_TABLES = Object.freeze([
+  'user_assessments',
   'ai_nudge_generations',
   'streak_protected_days',
   'burnout_score_history',

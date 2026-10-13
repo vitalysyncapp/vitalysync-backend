@@ -1,6 +1,5 @@
 import pool from '../config/db.js';
 import { getWeekStartDate } from './burnoutScoringEngine.js';
-import { upsertBurnoutScoreForDate } from './burnoutScoringService.js';
 import {
   awardStreakRewardsForLog,
   ensureUserStreak,
@@ -389,8 +388,7 @@ export async function submitCheckIn({
   userId: rawUserId,
   payload,
   idempotencyKey: rawIdempotencyKey,
-  database = pool,
-  scoreUpdater = upsertBurnoutScoreForDate
+  database = pool
 }) {
   const userId = normalizeUserId(rawUserId);
   const logDate = normalizeCheckInDate(payload?.log_date);
@@ -419,14 +417,6 @@ export async function submitCheckIn({
       throw serviceError('User not found', 404, 'USER_NOT_FOUND');
     }
 
-    if (schedule.requires_baseline_refresh) {
-      throw serviceError(
-        'A fresh burnout baseline is needed before this check-in',
-        409,
-        'BASELINE_REFRESH_REQUIRED',
-        publicBaselineRefresh(schedule)
-      );
-    }
 
     if (schedule.requiredMode === 'weekly' && requestedMode === 'daily') {
       throw serviceError(
@@ -509,12 +499,7 @@ export async function submitCheckIn({
     await client.query('COMMIT');
     transactionOpen = false;
 
-    let burnoutScore = null;
-    try {
-      burnoutScore = await scoreUpdater(database, userId, logDate);
-    } catch (scoreError) {
-      console.error('Unified check-in burnout score refresh error:', scoreError);
-    }
+    const burnoutScore = null;
 
     return {
       message: mode === 'weekly'

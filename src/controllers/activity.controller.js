@@ -1,6 +1,5 @@
 import pool from '../config/db.js';
 import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
-import { upsertBurnoutScoreForDate } from '../services/burnoutScoringService.js';
 
 const DEFAULT_GOAL_STEPS = 5000;
 const DEFAULT_STEP_LENGTH_METERS = 0.75;
@@ -174,16 +173,7 @@ async function upsertActivityLog(req, res, successMessage) {
 
     await client.query('COMMIT');
 
-    let burnoutScore = null;
-    try {
-      burnoutScore = await upsertBurnoutScoreForDate(
-        pool,
-        userId,
-        payload.logDate
-      );
-    } catch (scoreError) {
-      console.error('Activity burnout score refresh error:', scoreError);
-    }
+    const burnoutScore = null;
 
     return res.status(200).json({
       message: successMessage,

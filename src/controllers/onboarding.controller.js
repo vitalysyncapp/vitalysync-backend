@@ -1,4 +1,7 @@
+import { legacyScoringRetirement, retiredScoringResponse } from '../services/legacyScoringRetirement.js';
 import pool from '../config/db.js';
+import { AssessmentError } from '../services/assessmentDefinition.js';
+import { assessmentErrorResponse } from './assessment.controller.js';
 import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import {
   OnboardingServiceError,
@@ -278,14 +281,19 @@ export async function getRequiredOnboardingStatus(req, res) {
 }
 
 export async function submitOnboarding(req, res) {
+  if (!Object.hasOwn(req.body ?? {}, 'assessment')) return retiredScoringResponse(req, res);
   try {
-    const payload = await submitRequiredOnboarding(req.body);
-    return res.status(201).json(payload);
+    const payload = await submitRequiredOnboarding({ ...req.body, user_id: getAuthenticatedUserId(req) ?? req.body?.user_id });
+    return res.status(payload.idempotent_replay ? 200 : 201).json(payload);
   } catch (error) {
+    if (error instanceof AssessmentError) {
+      return assessmentErrorResponse(error, res);
+    }
     if (error instanceof OnboardingServiceError) {
       return res.status(error.statusCode).json({ message: error.message });
     }
 
+    if (req.body?.assessment) return assessmentErrorResponse(error, res);
     console.error('Submit onboarding error:', error);
     return res.status(500).json({ message: 'Failed to submit onboarding' });
   }
@@ -309,29 +317,16 @@ export async function updateWellnessProfile(req, res) {
   }
 }
 
-export async function updateBurnoutBaseline(req, res) {
-  try {
-    const userId = getAuthenticatedUserId(req) ?? req.params.userId;
-    const payload = await updateUserBurnoutBaseline(userId, req.body);
-    await recordProductEventSafely(pool, userId, {
-      eventName: 'baseline_refresh_completed',
-      eventKey: payload.client_refresh_id ?? `epoch:${payload.baseline_epoch_id}`,
-      dimensions: {
-        reason: payload.baseline_refresh_reason ?? 'manual_baseline_refresh'
-      }
-    });
-    return res.status(200).json(payload);
-  } catch (error) {
-    if (error instanceof OnboardingServiceError) {
-      return res.status(error.statusCode).json({ message: error.message });
-    }
+export const updateBurnoutBaseline = retiredScoringResponse;
 
-    console.error('Update burnout baseline error:', error);
-    return res.status(500).json({ message: 'Failed to update burnout baseline' });
-  }
+function hasLegacyAssessmentFields(body = {}) {
+  return ['burnout_answers', 'initial_burnout_score', 'risk_level', 'stress_level',
+    'mental_drain_level', 'focus_difficulty_level', 'overwhelm_level',
+    'recovery_level', 'motivation_level'].some((key) => Object.hasOwn(body, key));
 }
 
 export async function createOnboarding(req, res) {
+  if (hasLegacyAssessmentFields(req.body)) return retiredScoringResponse(req, res);
   const {
     user_id: rawUserId,
     role_type,
@@ -437,6 +432,7 @@ export async function createOnboarding(req, res) {
 }
 
 export async function updateOnboarding(req, res) {
+  if (hasLegacyAssessmentFields(req.body)) return retiredScoringResponse(req, res);
   const userId = getAuthenticatedUserId(req) ?? Number(req.params.userId);
   const {
     role_type,
@@ -507,12 +503,12 @@ export async function updateOnboarding(req, res) {
          activity_level = EXCLUDED.activity_level,
          exercise_days_per_week = EXCLUDED.exercise_days_per_week,
          meal_regularness = EXCLUDED.meal_regularness,
-         stress_level = EXCLUDED.stress_level,
-         mental_drain_level = EXCLUDED.mental_drain_level,
-         focus_difficulty_level = EXCLUDED.focus_difficulty_level,
-         overwhelm_level = EXCLUDED.overwhelm_level,
-         recovery_level = EXCLUDED.recovery_level,
-         motivation_level = EXCLUDED.motivation_level,
+         stress_level = user_onboarding.stress_level,
+         mental_drain_level = user_onboarding.mental_drain_level,
+         focus_difficulty_level = user_onboarding.focus_difficulty_level,
+         overwhelm_level = user_onboarding.overwhelm_level,
+         recovery_level = user_onboarding.recovery_level,
+         motivation_level = user_onboarding.motivation_level,
          height_cm = COALESCE(EXCLUDED.height_cm, user_onboarding.height_cm),
          weight_kg = COALESCE(EXCLUDED.weight_kg, user_onboarding.weight_kg),
          bmi = COALESCE(EXCLUDED.bmi, user_onboarding.bmi),

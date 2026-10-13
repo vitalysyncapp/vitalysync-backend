@@ -14,7 +14,9 @@ import { rateLimitConfig } from './config/rateLimit.config.js';
 import { rateLimiters } from './middleware/rateLimit.middleware.js';
 import { logApiError } from './utils/errorLogging.js';
 import { checkReadiness } from './services/readiness.service.js';
+import { isAssessmentEnabled } from './services/assessmentDefinition.js';
 import adaptiveRoutes from './routes/adaptive.routes.js';
+import assessmentRoutes from './routes/assessment.routes.js';
 import accountRoutes from './routes/account.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import activityRoutes from './routes/activity.routes.js';
@@ -46,6 +48,8 @@ app.get('/api/health', (_req, res) => {
   res.status(200).json({
     status: 'ok',
     service: 'vitalysync-backend',
+    revision: process.env.RENDER_GIT_COMMIT ?? null,
+    features: { cbi_assessment: isAssessmentEnabled() },
     timestamp: new Date().toISOString()
   });
 });
@@ -72,6 +76,7 @@ app.use(
 app.use('/api', requireAuth, rateLimiters.general, enforceAuthenticatedUser);
 
 app.use('/api/adaptive', adaptiveRoutes);
+app.use('/api/assessments', assessmentRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/burnout', burnoutRoutes);
 app.use('/api/exercise-goals', exerciseGoalRoutes);

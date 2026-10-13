@@ -267,35 +267,13 @@ test('weekly redo saves the five pulse answers and daily log atomically', async 
   assert.equal(client.commands.includes('COMMIT'), true);
 });
 
-test('thirty-day return blocks a unified save with the stable conflict code', async () => {
-  const client = new CheckInClient({
-    schedule: {
-      pulse_weekday: 1,
-      next_pulse_due_date: '2026-06-01',
-      last_completed_due_date: null,
-      last_completed_at: null
-    },
-    lastLoggedDate: '2026-04-26',
-    baselineEpochStartedAt: '2026-04-01'
-  });
-
-  await assert.rejects(
-    submitCheckIn({
-      userId: 1,
-      payload: dailyPayload(),
-      database: databaseFor(client),
-      scoreUpdater: async () => null
-    }),
-    (error) => {
-      assert.equal(error.statusCode, 409);
-      assert.equal(error.code, 'BASELINE_REFRESH_REQUIRED');
-      assert.equal(error.details.requires_baseline_refresh, true);
-      assert.equal(error.details.baseline_refresh_reason, 'thirty_day_return');
-      assert.equal(error.details.days_since_last_log, 30);
-      return true;
-    }
-  );
-
-  assert.equal(client.updatedDaily, false);
-  assert.equal(client.commands.includes('ROLLBACK'), true);
+test('thirty-day return saves logs without a CBI assessment or score writes', async () => {
+  const client = new CheckInClient({ schedule: { pulse_weekday: 1, next_pulse_due_date: '2026-06-01', last_completed_due_date: null, last_completed_at: null },
+    lastLoggedDate: '2026-04-26', baselineEpochStartedAt: '2026-04-01' });
+  const result = await submitCheckIn({ userId: 1, payload: dailyPayload(), database: databaseFor(client),
+    scoreUpdater: async () => assert.fail('No legacy scorer may run') });
+  assert.equal(result.burnout_score, null);
+  assert.equal(client.updatedDaily, true);
+  assert.equal(client.commands.includes('COMMIT'), true);
+  assert.equal(client.commands.some((sql) => /user_assessments|INSERT INTO burnout|UPDATE burnout/.test(sql)), false);
 });

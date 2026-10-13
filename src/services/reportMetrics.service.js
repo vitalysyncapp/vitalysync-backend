@@ -42,20 +42,16 @@ function average(rows, field, digits = 1, transform = (value) => value) {
   return Number(result.toFixed(digits));
 }
 
-function averageAcrossLoggedDays(rows, field, digits = 0) {
-  if (rows.length === 0) return null;
-
-  const total = rows.reduce((sum, row) => {
-    const value = Number(row[field]);
-    return sum + (Number.isFinite(value) ? value : 0);
-  }, 0);
-
-  return Number((total / rows.length).toFixed(digits));
+function observationCount(rows, field) {
+  return rows.filter((row) => row[field] != null && row[field] !== '' && Number.isFinite(Number(row[field]))).length;
 }
 
 function wellnessAverages(rows, expectedDays) {
   return {
     sleep: average(rows, 'sleep_hours'),
+    sleepDays: observationCount(rows, 'sleep_hours'),
+    moodDays: observationCount(rows, 'mood_index'),
+    energyDays: observationCount(rows, 'energy_level'),
     mood: average(rows, 'mood_index', 1, (value) => value + 1),
     energy: average(rows, 'energy_level'),
     count: rows.length,
@@ -78,8 +74,11 @@ function pulseAverages(rows, expectedPulses) {
 function activityAverages(rows, expectedDays) {
   return {
     steps: average(rows, 'steps', 0),
+    stepsDays: observationCount(rows, 'steps'),
+    activeMinutesDays: observationCount(rows, 'active_minutes'),
+    caloriesDays: observationCount(rows, 'calories_burned'),
     activeMinutes: average(rows, 'active_minutes', 0),
-    calories: averageAcrossLoggedDays(rows, 'calories_burned'),
+    calories: average(rows, 'calories_burned', 0),
     count: rows.length,
     expectedDays,
   };
@@ -90,6 +89,8 @@ export function buildReportMetrics({
   weeklyPulses = [],
   exercises = [],
   burnoutHistory = [],
+  assessments = [],
+  wellnessSummary = null,
   now = new Date(),
 }) {
   const todayUtc = Date.UTC(
@@ -121,6 +122,9 @@ export function buildReportMetrics({
     wellness,
     pulse,
     activity,
-    latestBurnout: burnoutHistory[0] ?? null,
+    assessments,
+    legacyHistory: burnoutHistory,
+    wellnessSummary,
+    latestBurnout: null,
   };
 }

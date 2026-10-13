@@ -30,25 +30,17 @@ export async function getUnifiedCheckInStatus(req, res) {
     const eventDate = String(
       req.query?.date ?? req.query?.log_date ?? new Date().toISOString().slice(0, 10)
     ).slice(0, 10);
-    if (result.requires_baseline_refresh) {
-      await recordProductEventSafely(pool, userId, {
-        eventName: 'baseline_refresh_prompted',
-        eventKey: eventDate,
-        dimensions: { reason: result.baseline_refresh_reason ?? 'thirty_day_return' }
-      });
-    } else {
-      const mode = result.required_mode === 'weekly' ? 'weekly' : 'daily';
-      await recordProductEventSafely(pool, userId, {
-        eventName: mode === 'weekly'
-          ? 'weekly_pulse_prompted'
-          : 'daily_check_in_prompted',
-        eventKey: eventDate,
-        dimensions: {
-          check_in_type: mode,
-          overdue: result.schedule?.is_overdue === true
-        }
-      });
-    }
+    const mode = result.required_mode === 'weekly' ? 'weekly' : 'daily';
+    await recordProductEventSafely(pool, userId, {
+      eventName: mode === 'weekly'
+        ? 'weekly_pulse_prompted'
+        : 'daily_check_in_prompted',
+      eventKey: eventDate,
+      dimensions: {
+        check_in_type: mode,
+        overdue: result.schedule?.is_overdue === true
+      }
+    });
     return res.status(200).json(result);
   } catch (error) {
     return sendError(res, error, 'Failed to fetch check-in status');

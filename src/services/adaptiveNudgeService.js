@@ -1,9 +1,10 @@
+import { loadWellnessSummary } from './wellnessSummary.service.js';
+import { WELLNESS_POLICY_VERSION } from './wellnessEvidencePolicy.js';
 import { enhanceNudgeRecommendations } from './aiNudgeService.js';
 import {
   localizeAdaptiveSummary,
   localizeNudgeRecommendation,
 } from '../i18n/generatedCopy.js';
-import { getBurnoutPatternSummary } from './burnoutPatternService.js';
 import { validateNudgeCopy } from './nudgeCopyPolicy.js';
 import {
   fallbackCopyForSeverity,
@@ -921,59 +922,19 @@ export async function getAdaptiveNudgeRecommendations(
   userId,
   { limit = 3, recordShown = true, endDate, useAi = false, locale = 'en' } = {}
 ) {
-  const normalizedLimit = boundedLimit(limit);
-  const summary = await getBurnoutPatternSummary(client, userId, { endDate });
-  const recentEvents = await loadRecentNudgeEvents(client, userId);
+  const summary = await loadWellnessSummary(client, userId, { endDate });
+  const recentEvents = (await loadRecentNudgeEvents(client, userId))
+    .filter((event) => eventMetadata(event).policy_version === WELLNESS_POLICY_VERSION);
   const preferences = await loadNudgeThrottlePreferences(client, userId);
-  const personalization = await loadNudgePersonalizationProfile(client, userId);
-  const stateDriven = stateRecommendation(summary);
-  const patternDriven = (summary.patterns ?? []).map((pattern) =>
-    recommendationFromPattern(pattern, summary)
-  );
-  const candidates = dedupeRecommendations(
-    [stateDriven, ...patternDriven].filter(Boolean)
-  );
-  const ranked = applyRecentFeedback(
-    candidates,
-    recentEvents,
-    preferences
-  ).slice(
-    0,
-    normalizedLimit
-  );
-  const personalizedRanked = ranked.map((recommendation) =>
-    personalizeNudgeRecommendation(recommendation, personalization)
-  );
+  const ranked = applyRecentFeedback(summary.recommendations, recentEvents, preferences)
+    .filter((item) => !item.metadata.suppressed_by_feedback && !item.metadata.throttled)
+    .slice(0, boundedLimit(limit));
   const recommendations = useAi
-    ? await enhanceNudgeRecommendations(client, userId, personalizedRanked, {
-      summary,
-      preferences,
-      personalization,
-      locale,
-      enhanceThrottled: !recordShown
-    })
-    : personalizedRanked;
-  const localizedRecommendations = recommendations.map((recommendation) =>
-    localizeNudgeRecommendation(recommendation, locale)
-  );
-  const localizedSummary = localizeAdaptiveSummary(summary, locale);
-
-  if (!recordShown || localizedRecommendations.length === 0) {
-    return {
-      summary: localizedSummary,
-      recommendations: localizedRecommendations
-    };
-  }
-
-  const primary = await attachShownEvent(
-    client,
-    userId,
-    localizedRecommendations[0],
-    preferences
-  );
-
-  return {
-    summary: localizedSummary,
-    recommendations: [primary, ...localizedRecommendations.slice(1)]
-  };
+    ? await enhanceNudgeRecommendations(client, userId, ranked, { summary, preferences, locale })
+    : ranked;
+  // These new policy entries retain their approved English wording until reviewed
+  // translations are registered. Do not run legacy pattern-copy replacements.
+  if (!recordShown || recommendations.length === 0) return { summary, recommendations };
+  const primary = await attachShownEvent(client, userId, recommendations[0], preferences);
+  return { summary, recommendations: [primary, ...recommendations.slice(1)] };
 }

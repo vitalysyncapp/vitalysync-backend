@@ -9,7 +9,7 @@ import {
 import { toUserFacingNudgeSeverity } from './nudgeSeverityPolicy.js';
 
 const DEFAULT_OPENAI_NUDGE_MODEL = 'gpt-5.4-mini';
-const PROMPT_VERSION = 'ai_nudge_v5_locale';
+const PROMPT_VERSION = 'cbi-approved-wording-1.0.0';
 const MAX_TITLE_LENGTH = NUDGE_COPY_LIMITS.title;
 const MAX_MESSAGE_LENGTH = NUDGE_COPY_LIMITS.message;
 const MAX_WHY_LENGTH = NUDGE_COPY_LIMITS.reason;
@@ -167,89 +167,30 @@ function pickWindow(summary, days) {
   return summary?.windows?.[`${days}_day`] ?? {};
 }
 
-export function buildAiContext(
-  recommendation,
-  summary,
-  preferences,
-  personalization = null,
-  locale = 'en'
-) {
-  const window7 = pickWindow(summary, 7);
-  const window14 = pickWindow(summary, 14);
-  const metadata = recommendation?.metadata ?? {};
-  const userDisplayName =
-    personalization?.displayName ?? metadata.user_display_name ?? null;
-  const personalizationProfile =
-    personalization?.profile ?? metadata.personalization_profile ?? {};
-
+export function buildAiContext(recommendation, summary, preferences, personalization = null, locale = 'en') {
   return {
-    deterministic_recommendation: {
-      nudge_type: recommendation.nudge_type,
-      priority: recommendation.priority,
-      title: recommendation.title,
-      message: recommendation.message,
-      action_label: recommendation.action_label,
-      trigger_reason: recommendation.trigger_reason,
-      recommended_focus: recommendation.recommended_focus,
-      pattern_type: recommendation.pattern_type,
-      severity: recommendation.severity,
-      internal_severity: metadata.internal_severity ?? null,
-      confidence_score: recommendation.confidence_score
-    },
-    burnout_context: {
-      latest_risk_level: summary?.latest_score?.risk_level ?? 'unknown',
-      latest_score: summary?.latest_score?.overall_score ?? null,
-      adaptive_state: summary?.adaptive_state ?? null,
-      seven_day: {
-        average_score: window7.average_score ?? null,
-        trend_direction: window7.trend_direction ?? null,
-        delta_from_start: window7.delta_from_start ?? null,
-        average_confidence_score: window7.average_confidence_score ?? null,
-        dominant_dimension: window7.dominant_dimension ?? null
-      },
-      fourteen_day: {
-        average_score: window14.average_score ?? null,
-        trend_direction: window14.trend_direction ?? null,
-        dominant_dimension: window14.dominant_dimension ?? null
-      },
-      patterns: (summary?.patterns ?? []).slice(0, 3).map((pattern) => ({
-        type: pattern.type,
-        severity: pattern.severity,
-        title: pattern.title,
-        recommended_focus: pattern.recommended_focus
-      }))
-    },
-    user_preferences: {
-      preferred_nudge_style: preferences.preferredNudgeStyle,
-      nudge_cooldown_hours: preferences.cooldownHours,
-      max_daily_nudges: preferences.maxDailyNudges
-    },
-    personal_context: {
-      user_display_name: userDisplayName,
-      profile: personalizationProfile,
-      variables_available: metadata.profile_variables_used ?? [],
-      visible_personalization: {
-        use_username_once_when_available: Boolean(userDisplayName),
-        use_at_most_one_profile_detail: true,
-        keep_profile_details_subtle: true
-      }
-    },
+    policy_version: recommendation.metadata?.policy_version,
+    approved_action: recommendation.metadata?.approved_action,
+    approved_messages: recommendation.metadata?.approved_messages ?? [],
+    recorded_observation: recommendation.metadata?.observation,
+    source_ids: recommendation.metadata?.source_ids ?? [],
+    title: recommendation.title,
+    action_label: recommendation.action_label,
     guardrails: {
-      do_not_change_priority_or_risk: true,
-      do_not_diagnose: true,
-      user_facing_severity: toUserFacingNudgeSeverity(
-        recommendation.severity,
-        recommendation.priority
-      ),
-      message_max_characters: MAX_MESSAGE_LENGTH,
-      use_one_concrete_action: true,
-      keep_behavioral_and_small: true,
-      do_not_reference_email_age_or_gender: true,
-      output_language: locale === 'fil'
-        ? 'Conversational Taglish (Filipino), with familiar English wellness terms'
-        : 'English'
+      choose_approved_wording_only: true,
+      do_not_change_action_observation_sources_or_trigger: true,
+      do_not_calculate_scores_or_infer_diagnoses: true
     }
   };
+}
+
+export function isApprovedNudgeWording(output, recommendation) {
+  return recommendation.metadata?.approved_messages?.includes(output?.message) === true
+    && output.title === recommendation.title
+    && output.suggested_action === recommendation.action_label
+    && output.why_this_matters === recommendation.metadata.observation
+    && (output.action_steps?.length ?? 0) === 0
+    && !output.safety_note;
 }
 
 async function recordAiGeneration(
@@ -323,7 +264,7 @@ export async function enhanceNudgeRecommendation(
             {
               type: 'input_text',
               text:
-                'You write short, human wellness nudges for VitalySync. Preserve deterministic priority, trigger, focus, and user-facing severity. Never show the words critical or urgent; use needs support for the strongest state. Do not diagnose burnout and do not invent data. Start the message with the username followed by a comma when one is available, and use that username exactly once across the full output. Use at most one subtle profile detail only when useful. Do not mention email, age, or gender. Give one concrete action and at most one short reason. Return no more than one action step, and make it restate the same action instead of adding another. Keep the message at 140 characters or fewer. Sound warm, direct, natural, and non-clinical. Avoid hype, promises, generic lectures, and unsupported claims. Follow guardrails.output_language exactly; for Filipino use natural conversational Taglish and keep common wellness and app terms in English. Return JSON only.'
+                'Select only an approved message from approved_messages. Copy title and action_label exactly. Copy recorded_observation into why_this_matters. Return no action_steps or safety_note. Do not add advice, evidence, scores, diagnoses, or change eligibility. Wording outside this approved set will be rejected. Return JSON only.'
             }
           ]
         },
@@ -333,7 +274,7 @@ export async function enhanceNudgeRecommendation(
             {
               type: 'input_text',
               text:
-                'Polish the deterministic nudge without changing its meaning or intensity. Keep one action, one useful reason at most, and stay inside the supplied context.\n\nContext JSON:\n' +
+                'Choose approved wording from this context:\n' +
                 JSON.stringify(context)
             }
           ]
@@ -349,7 +290,7 @@ export async function enhanceNudgeRecommendation(
       }
     });
     const parsed = parseJsonResponse(response);
-    const displayName = context.personal_context.user_display_name;
+    const displayName = null;
     const normalized = normalizeAiOutput(
       {
         ...parsed,
@@ -359,7 +300,7 @@ export async function enhanceNudgeRecommendation(
       displayName
     );
 
-    if (!normalized) {
+    if (!normalized || !isApprovedNudgeWording(parsed, recommendation)) {
       await recordAiGeneration(client, {
         userId,
         recommendation,

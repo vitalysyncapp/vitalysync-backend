@@ -1,10 +1,6 @@
 import pool from '../config/db.js';
 import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import {
-  upsertBurnoutScoreForDate,
-  upsertBurnoutScoresForWeek
-} from '../services/burnoutScoringService.js';
-import {
   advanceCheckInSchedule,
   getCheckInScheduleStatus
 } from '../services/checkInSchedule.service.js';
@@ -166,17 +162,6 @@ async function readUserStreak(client, userId) {
 
 function formatStreakPayload(streakRow) {
   return formatStreakPayloadForClient(streakRow);
-}
-
-function baselineRefreshConflict(res, status) {
-  return res.status(409).json({
-    message: 'A fresh burnout baseline is needed before this check-in',
-    code: 'BASELINE_REFRESH_REQUIRED',
-    requires_baseline_refresh: true,
-    baseline_refresh_reason: status.baseline_refresh_reason,
-    last_logged_date: status.last_logged_date,
-    days_since_last_log: status.days_since_last_log
-  });
 }
 
 export async function getTodayLog(req, res) {
@@ -531,10 +516,6 @@ export async function saveDailyLog(req, res) {
       localDate: String(logDate),
       forUpdate: true
     });
-    if (checkInStatus?.requires_baseline_refresh) {
-      await client.query('ROLLBACK');
-      return baselineRefreshConflict(res, checkInStatus);
-    }
 
     const streakRow = await ensureUserStreak(client, userId);
 
@@ -723,12 +704,7 @@ export async function saveDailyLog(req, res) {
 
     await client.query('COMMIT');
 
-    let burnoutScore = null;
-    try {
-      burnoutScore = await upsertBurnoutScoreForDate(pool, userId, logDate);
-    } catch (scoreError) {
-      console.error('Daily burnout score refresh error:', scoreError);
-    }
+    const burnoutScore = null;
 
     return res.status(isRedo ? 200 : 201).json({
       message: isRedo
@@ -884,10 +860,6 @@ export async function saveWeeklyPulse(req, res) {
       localDate: normalizedResponseDate,
       forUpdate: true
     });
-    if (schedule?.requires_baseline_refresh) {
-      await client.query('ROLLBACK');
-      return baselineRefreshConflict(res, schedule);
-    }
     const dueDate = schedule?.requiredMode === 'weekly'
       ? schedule.dueDate
       : weekStartDate;
@@ -961,17 +933,7 @@ export async function saveWeeklyPulse(req, res) {
     }
     await client.query('COMMIT');
 
-    let burnoutScoresUpdated = 0;
-    try {
-      const updatedScores = await upsertBurnoutScoresForWeek(
-        pool,
-        userId,
-        weekStartDate
-      );
-      burnoutScoresUpdated = updatedScores.length;
-    } catch (scoreError) {
-      console.error('Weekly pulse burnout score refresh error:', scoreError);
-    }
+    const burnoutScoresUpdated = 0;
 
     return res.status(200).json({
       message: 'Weekly pulse saved successfully',

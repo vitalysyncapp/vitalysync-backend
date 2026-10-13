@@ -235,7 +235,7 @@ test('late completion advances to the next configured weekday without stacking',
   assert.equal(client.schedule.last_completed_due_date, '2026-05-25');
 });
 
-test('schedule status exposes the thirty-day baseline refresh contract', async () => {
+test('schedule status never requires reassessment after thirty days', async () => {
   const client = new ScheduleClient({
     firstLogDate: '2026-05-01',
     lastLoggedDate: '2026-06-28',
@@ -247,8 +247,8 @@ test('schedule status exposes the thirty-day baseline refresh contract', async (
     localDate: '2026-07-28'
   });
 
-  assert.equal(status.requires_baseline_refresh, true);
-  assert.equal(status.baseline_refresh_reason, 'thirty_day_return');
+  assert.equal(status.requires_baseline_refresh, false);
+  assert.equal(status.baseline_refresh_reason, null);
   assert.equal(status.last_logged_date, '2026-06-28');
   assert.equal(status.days_since_last_log, 30);
 });
