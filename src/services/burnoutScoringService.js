@@ -1,4 +1,3 @@
-import { rejectLegacyScoring } from './legacyScoringRetirement.js';
 import {
   addDays,
   calculateBurnoutBaselineScore,
@@ -255,16 +254,139 @@ export async function loadBurnoutScoreInputs(client, userId, scoreDate) {
   };
 }
 
-export async function upsertBurnoutScoreForDate() {
-  rejectLegacyScoring();
+export async function upsertBurnoutScoreForDate(client, userId, scoreDate) {
+  const inputs = await loadBurnoutScoreInputs(client, userId, scoreDate);
+  if (!inputs.dailyLog) {
+    return null;
+  }
+
+  const score = calculateDailyBurnoutSnapshot(inputs);
+
+  if (!score) {
+    return null;
+  }
+
+  const result = await client.query(
+    `INSERT INTO burnout_score_history (
+       user_id,
+       baseline_epoch_id,
+       score_date,
+       overall_score,
+       risk_level,
+       emotional_exhaustion_score,
+       detachment_score,
+       reduced_accomplishment_score,
+       workload_strain_score,
+       recovery_deficit_score,
+       confidence_score,
+       completeness_score,
+       data_points_count,
+       missing_fields,
+       contributing_factors,
+       source_snapshot,
+       scoring_version
+     )
+     VALUES (
+       $1, $2, $3, $4, $5, $6, $7, $8,
+       $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb, $17
+     )
+     ON CONFLICT (user_id, score_date)
+     DO UPDATE SET
+       overall_score = EXCLUDED.overall_score,
+       baseline_epoch_id = EXCLUDED.baseline_epoch_id,
+       risk_level = EXCLUDED.risk_level,
+       emotional_exhaustion_score = EXCLUDED.emotional_exhaustion_score,
+       detachment_score = EXCLUDED.detachment_score,
+       reduced_accomplishment_score = EXCLUDED.reduced_accomplishment_score,
+       workload_strain_score = EXCLUDED.workload_strain_score,
+       recovery_deficit_score = EXCLUDED.recovery_deficit_score,
+       confidence_score = EXCLUDED.confidence_score,
+       completeness_score = EXCLUDED.completeness_score,
+       data_points_count = EXCLUDED.data_points_count,
+       missing_fields = EXCLUDED.missing_fields,
+       contributing_factors = EXCLUDED.contributing_factors,
+       source_snapshot = EXCLUDED.source_snapshot,
+       scoring_version = EXCLUDED.scoring_version,
+       updated_at = NOW()
+     RETURNING
+       burnout_score_id,
+       user_id,
+       baseline_epoch_id,
+       score_date,
+       overall_score,
+       risk_level,
+       emotional_exhaustion_score,
+       detachment_score,
+       reduced_accomplishment_score,
+       workload_strain_score,
+       recovery_deficit_score,
+       confidence_score,
+       completeness_score,
+       data_points_count,
+       missing_fields,
+       contributing_factors,
+       source_snapshot,
+       scoring_version,
+       created_at,
+       updated_at`,
+    [
+      userId,
+      score.baseline_epoch_id,
+      score.score_date,
+      score.overall_score,
+      score.risk_level,
+      score.emotional_exhaustion_score,
+      score.detachment_score,
+      score.reduced_accomplishment_score,
+      score.workload_strain_score,
+      score.recovery_deficit_score,
+      score.confidence_score,
+      score.completeness_score,
+      score.data_points_count,
+      score.missing_fields,
+      JSON.stringify(score.contributing_factors),
+      JSON.stringify(score.source_snapshot),
+      score.scoring_version
+    ]
+  );
+
+  return formatBurnoutScoreRow(result.rows[0]);
 }
 
-export async function upsertBurnoutScoresForWeek() {
-  rejectLegacyScoring();
+export async function upsertBurnoutScoresForWeek(client, userId, weekStartDate) {
+  const endDate = addDays(weekStartDate, 6);
+  return upsertBurnoutScoresForRange(client, userId, weekStartDate, endDate);
 }
 
-export async function upsertBurnoutScoresForRange() {
-  rejectLegacyScoring();
+export async function upsertBurnoutScoresForRange(
+  client,
+  userId,
+  startDate,
+  endDate
+) {
+  const result = await client.query(
+    `SELECT log_date
+     FROM daily_logs
+     WHERE user_id = $1
+       AND log_date BETWEEN $2 AND $3
+     ORDER BY log_date ASC`,
+    [userId, startDate, endDate]
+  );
+
+  const scores = [];
+  for (const row of result.rows) {
+    const score = await upsertBurnoutScoreForDate(
+      client,
+      userId,
+      formatDateOnly(row.log_date)
+    );
+
+    if (score) {
+      scores.push(score);
+    }
+  }
+
+  return scores;
 }
 
 export async function getLatestBurnoutScore(client, userId) {

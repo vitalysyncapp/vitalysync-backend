@@ -44,7 +44,6 @@ function sampleMetrics() {
       { log_date: dateDaysAgo(7), steps: 3000, active_minutes: 12, calories_burned: 150 },
       { log_date: dateDaysAgo(30), steps: 2000, active_minutes: 8, calories_burned: 100 },
     ],
-    assessments: [{ completed_at: '2026-07-26T12:00:00Z', cbi_score: 50, completion_status: 'complete', scoring_version: 'cbi-pb-mean-1.0.0' }],
     burnoutHistory: [
       {
         score_date: dateDaysAgo(0),
@@ -73,9 +72,9 @@ test('report metrics use exact windows, a 1-5 mood scale, and logged-day activit
   assert.equal(metrics.pulse.month.recoveryRest, 3);
   assert.equal(metrics.activity.week.steps, 9000);
   assert.equal(metrics.activity.week.activeMinutes, 30);
-  assert.equal(metrics.activity.week.calories, 400);
+  assert.equal(metrics.activity.week.calories, 200);
   assert.equal(metrics.activity.month.steps, 6000);
-  assert.equal(metrics.activity.month.calories, 275);
+  assert.equal(metrics.activity.month.calories, 183);
 });
 
 test('report indicators consistently map values to semantic colors', () => {
@@ -120,15 +119,20 @@ test('report insights describe table values and keep recommendations last in the
   assert.doesNotMatch(documentXml, /w:type="pct"/);
   assert.ok(documentXml.indexOf('Recommendations') > documentXml.indexOf('Exercise and activity'));
   assert.ok(documentXml.indexOf('Recommendations') > documentXml.indexOf('This report supports personal wellness tracking'));
-  assert.match(documentXml, /Legacy composite history/);
-  assert.match(documentXml, /50.0 \/ 100/);
-  assert.doesNotMatch(documentXml, /Burnout status and dimensions|High risk/);
-  assert.doesNotMatch(documentXml, /AI-generated highlight/);
-  assert.match(documentXml, /recorded days/);
+  assert.match(documentXml, /The latest burnout result is 82\/100 with a critical status/);
+  assert.match(documentXml, /AI-generated highlight/);
+  assert.match(documentXml, /Mood averaged 3\/5/);
   assert.match(documentXml, /Weekly pulse context/);
   assert.match(documentXml, /Pressure/);
-  assert.match(documentXml, /Avg recorded calories/);
+  assert.match(documentXml, /Avg calories\/logged day/);
 
+  for (const color of ['2E7D32', '1565C0', '9A6700', 'C62828', '6A1B9A']) {
+    assert.match(documentXml, new RegExp(color));
+  }
+
+  const firstHeaderRow = documentXml.match(/<w:tr[\s\S]*?<w:t[^>]*>Metric<\/w:t>[\s\S]*?<\/w:tr>/)?.[0];
+  assert.ok(firstHeaderRow);
+  assert.doesNotMatch(firstHeaderRow, /<w:shd/);
   const activityWeekRow = documentXml
     .match(/<w:tr[\s\S]*?<\/w:tr>/g)
     ?.find((row) => row.includes('9000') && row.includes('30 min'));
@@ -158,6 +162,6 @@ test('Filipino report document localizes headings, dates, and deterministic guid
   assert.match(documentXml, /Petsa ng report/);
   assert.match(documentXml, /Buod ng report/);
   assert.match(documentXml, /Mga rekomendasyon/);
-  assert.doesNotMatch(documentXml, /Protektahan ang recovery time/);
+  assert.match(documentXml, /Protektahan ang recovery time/);
   assert.match(documentXml, /Hulyo 26, 2026/);
 });

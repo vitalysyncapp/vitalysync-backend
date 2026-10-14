@@ -18,7 +18,7 @@ import {
 } from 'docx';
 import { readFile } from 'node:fs/promises';
 
-import { formatDateOnly } from './burnoutScoringEngine.js';
+import { classifyReportMetric } from './reportInsights.service.js';
 import { reportText } from '../i18n/reportCopy.js';
 
 const PAGE_WIDTH = 12240;
@@ -117,8 +117,39 @@ function plainCell(text, width, alignment = AlignmentType.LEFT) {
   );
 }
 
-function semanticCell(valueText, metric, value, width, options = {}) {
-  return plainCell(valueText, width, AlignmentType.CENTER);
+function semanticCell(valueText, metric, value, width, {
+  appendLabel = true,
+  compactCoverageLabel = false,
+  locale = 'en',
+} = {}) {
+  const indicator = classifyReportMetric(metric, value);
+  const palette = COLORS[indicator.level];
+  const coverageLabels = {
+    good: 'Good',
+    okay: 'Okay',
+    warning: 'Limited',
+    high: 'Very limited',
+    unknown: 'No data',
+  };
+  const label = reportText(compactCoverageLabel
+    ? coverageLabels[indicator.level]
+    : indicator.label, locale);
+
+  return tableCell(
+    width,
+    [
+      tableParagraph(
+        [
+          run(valueText, { bold: true, size: 19, color: palette.text }),
+          ...(appendLabel
+            ? [run(` ${label}`, { size: 16, color: palette.text })]
+            : []),
+        ],
+        AlignmentType.CENTER,
+      ),
+    ],
+    { shading: { type: ShadingType.CLEAR, fill: palette.fill } },
+  );
 }
 
 function reportTable(headers, widths, rows) {
@@ -144,29 +175,34 @@ function format(value, suffix = '') {
   return value == null ? 'N/A' : `${value}${suffix}`;
 }
 
-function assessmentTable(metrics) {
-  const widths = [4000, 2500, TABLE_WIDTH - 6500];
-  const records = metrics.assessments ?? [];
-  return reportTable(['Completed at (UTC)', 'CBI Personal Burnout', 'Status / scoring version'], widths,
-    (records.length ? records : [null]).map((item) => new TableRow({ cantSplit: true, children: [
-      plainCell(item ? new Date(item.completed_at).toISOString() : 'No completed assessment', widths[0]),
-      plainCell(item ? `${Number(item.cbi_score).toFixed(1)} / 100` : 'Not available', widths[1]),
-      plainCell(item ? `${item.completion_status} / ${item.scoring_version}` : 'Not available', widths[2])
-    ] })));
-}
+function burnoutTable(metrics, locale) {
+  const widths = [4800, 2200, TABLE_WIDTH - 7000];
+  const latest = metrics.latestBurnout;
+  const rows = latest
+    ? [
+        ['Latest risk level', String(latest.status_category ?? 'Unknown'), 'burnoutRisk', latest.status_category],
+        ['Overall burnout score', format(latest.burnout_score, '/100'), 'burnoutScore', latest.burnout_score],
+        ['Emotional exhaustion', format(latest.emotional_exhaustion_score, '/100'), 'burnoutDimension', latest.emotional_exhaustion_score],
+        ['Detachment', format(latest.detachment_score, '/100'), 'burnoutDimension', latest.detachment_score],
+        ['Reduced accomplishment', format(latest.reduced_accomplishment_score, '/100'), 'burnoutDimension', latest.reduced_accomplishment_score],
+      ]
+    : [['Latest result', 'N/A', 'burnoutScore', null]];
 
-function legacyTable(metrics) {
-  const widths = [4000, 2500, TABLE_WIDTH - 6500];
-  return reportTable(['Legacy date', 'Stored composite', 'Stored legacy label'], widths,
-    (metrics.legacyHistory ?? []).map((item) => new TableRow({ cantSplit: true, children: [
-      plainCell(formatDateOnly(item.score_date), widths[0]),
-      plainCell(format(item.burnout_score, ' / 100'), widths[1]),
-      plainCell(item.status_category ?? 'Not available', widths[2])
-    ] })));
-}
-
-function observed(value, suffix, count) {
-  return `${format(value, suffix)} (${count ?? 0} days)`;
+  return reportTable(
+    ['Metric', 'Value', 'Indicator'].map((item) => reportText(item, locale)),
+    widths,
+    rows.map(([label, valueText, metric, value]) => {
+      const indicator = classifyReportMetric(metric, value);
+      return new TableRow({
+        cantSplit: true,
+        children: [
+          plainCell(reportText(label, locale), widths[0]),
+          plainCell(reportText(valueText, locale), widths[1], AlignmentType.CENTER),
+          semanticCell(reportText(indicator.label, locale), metric, value, widths[2], { appendLabel: false, locale }),
+        ],
+      });
+    }),
+  );
 }
 
 function wellnessTable(metrics, locale) {
@@ -177,9 +213,9 @@ function wellnessTable(metrics, locale) {
       cantSplit: true,
       children: [
         plainCell(reportText(label, locale), widths[0]),
-        semanticCell(observed(period.sleep, ' h', period.sleepDays), 'sleep', period.sleep, widths[1], { locale }),
-        semanticCell(observed(period.mood, '/5', period.moodDays), 'mood', period.mood, widths[2], { locale }),
-        semanticCell(observed(period.energy, '/5', period.energyDays), 'energy', period.energy, widths[3], { locale }),
+        semanticCell(format(period.sleep, ' h'), 'sleep', period.sleep, widths[1], { locale }),
+        semanticCell(format(period.mood, '/5'), 'mood', period.mood, widths[2], { locale }),
+        semanticCell(format(period.energy, '/5'), 'energy', period.energy, widths[3], { locale }),
         semanticCell(
           `${period.count}/${period.expectedDays}`,
           'coverage',
@@ -238,20 +274,20 @@ function activityTable(metrics, locale) {
       children: [
         plainCell(reportText(label, locale), widths[0]),
         semanticCell(
-          observed(period.steps, '', period.stepsDays),
+          format(period.steps),
           'steps',
           period.steps,
           widths[1],
           { appendLabel: false, locale },
         ),
         semanticCell(
-          observed(period.activeMinutes, ' min', period.activeMinutesDays),
+          format(period.activeMinutes, ' min'),
           'activeMinutes',
           period.activeMinutes,
           widths[2],
           { appendLabel: false, locale },
         ),
-        plainCell(observed(period.calories, '', period.caloriesDays), widths[3], AlignmentType.CENTER),
+        plainCell(format(period.calories), widths[3], AlignmentType.CENTER),
         semanticCell(
           `${period.count}/${period.expectedDays}`,
           'coverage',
@@ -264,7 +300,7 @@ function activityTable(metrics, locale) {
   });
 
   return reportTable(
-    ['Period', 'Avg recorded steps', 'Avg active time', 'Avg recorded calories', 'Logged days'].map((item) => reportText(item, locale)),
+    ['Period', 'Avg steps/day', 'Avg active time', 'Avg calories/logged day', 'Logged days'].map((item) => reportText(item, locale)),
     widths,
     rows,
   );
@@ -298,12 +334,27 @@ function signalsBlock(section, locale) {
   ];
 }
 
-function recommendationParagraph(text) {
+function indicatorGuide(locale) {
+  return bodyParagraph([
+    run(reportText('Indicator guide: ', locale), { bold: true, color: '000000' }),
+    run(reportText('Good', locale), { bold: true, color: COLORS.good.text }),
+    run('  |  '),
+    run(reportText('Okay', locale), { bold: true, color: COLORS.okay.text }),
+    run('  |  '),
+    run(reportText('Warning', locale), { bold: true, color: COLORS.warning.text }),
+    run('  |  '),
+    run(reportText('High risk', locale), { bold: true, color: COLORS.high.text }),
+    run('  |  '),
+    run(reportText('AI-generated', locale), { bold: true, color: COLORS.ai.text }),
+  ], { alignment: AlignmentType.CENTER, spacing: { after: 240 } });
+}
+
+function recommendationParagraph(text, aiGenerated) {
   return new Paragraph({
     style: 'Normal',
     numbering: { reference: 'report-recommendations', level: 0 },
     spacing: { after: 100, line: 276 },
-    children: [run(text, { color: COLORS.ink })],
+    children: [run(text, { color: aiGenerated ? COLORS.ai.text : COLORS.ink })],
   });
 }
 
@@ -311,11 +362,15 @@ export async function buildUserReportDocx({
   profile,
   metrics,
   insights,
+  aiContent = null,
   reportDate = new Date(),
   locale = 'en',
 }) {
   const user = profile?.user ?? {};
-  const recommendations = insights.recommendations;
+  const recommendations = aiContent?.recommendations?.length
+    ? aiContent.recommendations
+    : insights.recommendations;
+  const aiRecommendations = Boolean(aiContent?.recommendations?.length);
   const overviewPalette = COLORS[insights.overallLevel] ?? COLORS.unknown;
 
   const children = [
@@ -324,11 +379,11 @@ export async function buildUserReportDocx({
       alignment: AlignmentType.CENTER,
       children: [run(reportText('VitalySync User Wellness Report', locale), { bold: true, size: 36, color: '000000' })],
     }),
-    bodyParagraph(reportText('A personal summary of CBI assessments and recorded wellness and activity.', locale), {
+    bodyParagraph(reportText('A personal summary of logged wellness, burnout, and activity patterns.', locale), {
       alignment: AlignmentType.CENTER,
       spacing: { after: 180 },
     }),
-    bodyParagraph('Missing observations are shown as N/A. CBI results are observed assessments only; no daily interpolation or clinical cutoffs are used.'),
+    indicatorGuide(locale),
 
     heading(reportText('User information', locale)),
     bodyParagraph([run(reportText('Name: ', locale), { bold: true }), run(user.username ?? 'N/A')], { spacing: { after: 60 } }),
@@ -341,12 +396,17 @@ export async function buildUserReportDocx({
 
     heading(reportText('Report overview', locale)),
     bodyParagraph([run(insights.overview, { color: overviewPalette.text })]),
-    heading('Exhaustion assessment - CBI Personal Burnout'),
-    assessmentTable(metrics),
+    ...(aiContent?.highlight
+      ? [bodyParagraph([
+          run(reportText('AI-generated highlight: ', locale), { bold: true, color: '000000' }),
+          run(aiContent.highlight, { color: COLORS.ai.text }),
+        ])]
+      : []),
+
+    heading(reportText('Burnout status and dimensions', locale)),
+    burnoutTable(metrics, locale),
     insightParagraph(insights.sections.burnout.insight, insights.sections.burnout.level, locale),
     ...signalsBlock(insights.sections.burnout, locale),
-
-    ...((metrics.legacyHistory?.length ?? 0) > 0 ? [heading('Legacy composite history - retired methodology'), bodyParagraph('Stored results from the earlier app formula. These are not CBI assessments and are not comparable to them.'), legacyTable(metrics)] : []),
 
     heading(reportText('Wellness averages', locale)),
     wellnessTable(metrics, locale),
@@ -365,11 +425,14 @@ export async function buildUserReportDocx({
 
     bodyParagraph([
       run(reportText('Important: ', locale), { bold: true }),
-      run(reportText('This report supports personal wellness tracking and is not medical advice, a diagnosis, or treatment. Read the values alongside their dates and recorded-day counts.', locale)),
+      run(reportText('This report supports personal wellness tracking and is not medical advice, a diagnosis, or treatment. Color indicators summarize app-defined patterns and should be read alongside the underlying values and data coverage.', locale)),
     ], { spacing: { before: 260, after: 160 }, style: 'ReportNote' }),
 
     heading(reportText('Recommendations', locale)),
-    ...recommendations.map((item) => recommendationParagraph(item)),
+    ...(aiRecommendations
+      ? [bodyParagraph([run(reportText('The following suggestions are AI-generated from the aggregated values in this report.', locale), { color: COLORS.ai.text })])]
+      : []),
+    ...recommendations.map((item) => recommendationParagraph(item, aiRecommendations)),
   ];
 
   const doc = new Document({

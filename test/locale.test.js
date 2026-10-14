@@ -63,7 +63,7 @@ test('localizes deterministic adaptive and nutrition copy with metadata', () => 
   assert.equal(nutrition.metadata.message_key, 'nutrition.protein');
 });
 
-test('AI nudge context restricts language generation to registered wording', () => {
+test('AI nudge context explicitly requests conversational Taglish', () => {
   const context = buildAiContext(
     {
       nudge_type: 'recovery_break',
@@ -79,7 +79,7 @@ test('AI nudge context restricts language generation to registered wording', () 
     'fil',
   );
 
-  assert.equal(context.guardrails.choose_approved_wording_only, true);
+  assert.match(context.guardrails.output_language, /Taglish/);
 });
 
 test('auth email templates use precise Taglish when Filipino is requested', () => {

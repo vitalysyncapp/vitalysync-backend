@@ -54,9 +54,6 @@ test('app sends security headers and request ids', async () => {
     assert.equal(response.headers.get('x-powered-by'), null);
     assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
     assert.match(response.headers.get('x-request-id') ?? '', /.+/);
-    const health = await response.json();
-    assert.equal(health.revision, process.env.RENDER_GIT_COMMIT ?? null);
-    assert.equal(typeof health.features.cbi_assessment, 'boolean');
   });
 });
 

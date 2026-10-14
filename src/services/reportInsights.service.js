@@ -311,16 +311,28 @@ function recommendationsFor(sections, metrics) {
   return recommendations.slice(0, 3);
 }
 
-
 export function buildReportInsights(metrics) {
-  const section = (text) => ({ level: 'unknown', insight: text, signals: [] });
-  return { overallLevel: 'unknown', overview: 'Dated CBI observations and separate wellness records. Missing observations are not zero; no clinical risk bands are assigned.',
-    sections: {
-      burnout: section('The CBI score describes self-reported exhaustion, not a diagnosis or probability. Daily logs do not recalculate it.'),
-      wellness: section('Averages use available values only. Recorded days are shown for each reporting period.'),
-      pulse: section('Weekly reflections keep their original fields and scales; they are not CBI answers.'),
-      activity: section('Activity values describe recorded days, not complete observation of every day.')
-    },
-    recommendations: (metrics.wellnessSummary?.recommendations ?? []).slice(0, 1).map((item) => `${item.trigger_reason} ${item.message} Source: ${item.metadata.evidence.url ?? 'Your record and chosen goal'}.`)
+  const sections = {
+    burnout: burnoutSection(metrics.latestBurnout),
+    wellness: wellnessSection(metrics.wellness),
+    pulse: pulseSection(metrics.pulse),
+    activity: activitySection(metrics.activity),
+  };
+  const overallLevel = highestLevel(Object.values(sections));
+  const summaries = {
+    good: 'mostly supportive signals',
+    okay: 'generally steady signals',
+    warning: 'some warning signals worth watching',
+    high: 'high-risk signals that deserve prompt attention',
+  };
+  const overview = overallLevel === 'unknown'
+    ? 'There is not enough recent data to summarize a reliable wellness pattern.'
+    : `The current report contains ${summaries[overallLevel]}. Review the section-level indicators for the specific values behind this summary.`;
+
+  return {
+    overview,
+    overallLevel,
+    sections,
+    recommendations: recommendationsFor(sections, metrics),
   };
 }

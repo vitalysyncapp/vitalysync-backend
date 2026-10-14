@@ -216,9 +216,7 @@ export async function getCheckInScheduleStatus(
     lastCompletedAt: schedule.last_completed_at ?? null,
     pulseWeekday,
     todayPulse,
-    ...returnState,
-    requires_baseline_refresh: false,
-    baseline_refresh_reason: null
+    ...returnState
   };
 }
 

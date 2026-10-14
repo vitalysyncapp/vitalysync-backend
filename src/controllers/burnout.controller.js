@@ -1,9 +1,9 @@
-import { retiredScoringResponse } from '../services/legacyScoringRetirement.js';
 import pool from '../config/db.js';
 import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import {
   getBurnoutScoreHistory,
-  getLatestBurnoutScore
+  getLatestBurnoutScore,
+  upsertBurnoutScoreForDate
 } from '../services/burnoutScoringService.js';
 import { getBurnoutPatternSummary } from '../services/burnoutPatternService.js';
 
@@ -27,6 +27,26 @@ function parseLimit(value) {
   }
 
   return Math.min(parsed, 90);
+}
+
+function parseOptionalBoolean(value, fallback = true) {
+  if (value == null) {
+    return fallback;
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'true') {
+    return true;
+  }
+  if (normalized === 'false') {
+    return false;
+  }
+
+  return fallback;
 }
 
 function addDays(dateString, days) {
@@ -115,11 +135,47 @@ export async function getScoreHistory(req, res) {
   }
 }
 
-export const recalculateScore = retiredScoringResponse;
+export async function recalculateScore(req, res) {
+  const body = req.body ?? {};
+  const userId = getAuthenticatedUserId(req) ?? parsePositiveInt(body.user_id);
+  const scoreDate = String(body.score_date ?? todayKey()).trim();
+
+  if (!userId) {
+    return res.status(400).json({ message: 'Valid user_id is required' });
+  }
+
+  if (!isValidDateString(scoreDate)) {
+    return res.status(400).json({ message: 'Valid score_date is required' });
+  }
+
+  try {
+    const userExists = await ensureUserExists(pool, userId);
+    if (!userExists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const score = await upsertBurnoutScoreForDate(pool, userId, scoreDate);
+
+    if (!score) {
+      return res.status(422).json({
+        message: 'Not enough wellness data is available to calculate a burnout score'
+      });
+    }
+
+    return res.status(200).json({
+      message: 'Burnout score recalculated successfully',
+      score
+    });
+  } catch (error) {
+    console.error('Recalculate burnout score error:', error);
+    return res.status(500).json({ message: 'Failed to recalculate burnout score' });
+  }
+}
 
 export async function getPatternSummary(req, res) {
   const userId = getAuthenticatedUserId(req) ?? parsePositiveInt(req.query.user_id);
   const endDate = String(req.query.end ?? todayKey()).trim();
+  const refreshScores = parseOptionalBoolean(req.query.refresh, true);
 
   if (!userId) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -136,7 +192,8 @@ export async function getPatternSummary(req, res) {
     }
 
     const summary = await getBurnoutPatternSummary(pool, userId, {
-      endDate
+      endDate,
+      refreshScores
     });
 
     return res.status(200).json(summary);

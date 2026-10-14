@@ -1,7 +1,15 @@
-import { rejectLegacyScoring } from './legacyScoringRetirement.js';
 import pool from '../config/db.js';
-import { AssessmentError, requireAssessmentEnabled } from './assessmentDefinition.js';
-import { assessmentFingerprint, prepareAssessment, saveAssessmentWithClient } from './assessment.service.js';
+import {
+  calculateBurnoutBaselineScore,
+  getLatestBurnoutScore,
+  upsertBurnoutScoresForRange
+} from './burnoutScoringService.js';
+import { addDays, formatDateOnly } from './burnoutScoringEngine.js';
+import {
+  ensureBaselineEpochForDate,
+  startBaselineEpoch
+} from './baselineEpochService.js';
+import { detectReturnState } from './burnoutEvidencePolicy.js';
 import { ensureDefaultNutritionCalorieGoal } from './nutrition.service.js';
 
 const ROLE_OPTIONS = new Set([
@@ -618,6 +626,13 @@ function buildAiBaseline(profile) {
       usual_wake_time: profile.usual_wake_time,
       exercise_goal_days: profile.exercise_goal_days,
       workload_level: profile.workload_level
+    },
+    burnout_baseline: {
+      emotional_exhaustion: toNumberOrNull(profile.emotional_exhaustion_score),
+      depersonalization: toNumberOrNull(profile.depersonalization_score),
+      personal_accomplishment: toNumberOrNull(profile.personal_accomplishment_score),
+      initial_burnout_score: toNumberOrNull(profile.initial_burnout_score),
+      initial_burnout_level: profile.initial_burnout_level
     }
   };
 }
@@ -655,33 +670,19 @@ async function insertAnswerRecords(client, userId, answerRecords) {
   }
 }
 
-export async function submitRequiredOnboarding(payload, { db = pool, now = new Date() } = {}) {
-  if (!Object.hasOwn(payload ?? {}, 'assessment')) rejectLegacyScoring();
+export async function submitRequiredOnboarding(payload) {
   const userId = parseUserId(payload?.user_id);
   const profile = normalizeProfile(payload?.profile);
-  requireAssessmentEnabled();
-  if (Object.keys(payload).some((key) => !['user_id', 'profile', 'assessment'].includes(key))) {
-    throw new AssessmentError('INVALID_ASSESSMENT_PAYLOAD', 'Use a profile and assessment without legacy answers.');
-  }
-  const prepared = prepareAssessment(payload.assessment);
-  const answerRecords = buildProfileAnswerRecords(profile);
-  const client = await db.connect();
+  const burnoutAnswers = buildBurnoutAnswerRecords(payload?.burnout_answers);
+  const scores = calculateBurnoutBaselineScore(burnoutAnswers);
+  const answerRecords = [
+    ...buildProfileAnswerRecords(profile),
+    ...burnoutAnswers
+  ];
+  const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
-
-    const assessmentResult = await saveAssessmentWithClient(client, userId, prepared, {
-      now,
-      onboardingFingerprint: assessmentFingerprint({ profile, assessment: prepared.request_fingerprint }),
-    });
-    if (assessmentResult.idempotent_replay) {
-      const current = await client.query('SELECT * FROM user_onboarding_profiles WHERE user_id = $1', [userId]);
-      await client.query('COMMIT');
-      return {
-        message: 'Onboarding already submitted', onboarding_completed: true,
-        profile: current.rows[0], ...assessmentResult,
-      };
-    }
 
     const userResult = await client.query(
       'SELECT user_id, age, gender FROM users WHERE user_id = $1 FOR UPDATE',
@@ -733,11 +734,11 @@ export async function submitRequiredOnboarding(payload, { db = pool, now = new D
          workload_level = EXCLUDED.workload_level,
          has_extra_responsibilities = EXCLUDED.has_extra_responsibilities,
          extra_responsibility_level = EXCLUDED.extra_responsibility_level,
-         emotional_exhaustion_score = user_onboarding_profiles.emotional_exhaustion_score,
-         depersonalization_score = user_onboarding_profiles.depersonalization_score,
-         personal_accomplishment_score = user_onboarding_profiles.personal_accomplishment_score,
-         initial_burnout_score = user_onboarding_profiles.initial_burnout_score,
-         initial_burnout_level = user_onboarding_profiles.initial_burnout_level,
+         emotional_exhaustion_score = EXCLUDED.emotional_exhaustion_score,
+         depersonalization_score = EXCLUDED.depersonalization_score,
+         personal_accomplishment_score = EXCLUDED.personal_accomplishment_score,
+         initial_burnout_score = EXCLUDED.initial_burnout_score,
+         initial_burnout_level = EXCLUDED.initial_burnout_level,
          updated_at = CURRENT_TIMESTAMP
        RETURNING *`,
       [
@@ -751,11 +752,11 @@ export async function submitRequiredOnboarding(payload, { db = pool, now = new D
         profile.workload_level,
         profile.has_extra_responsibilities,
         profile.extra_responsibility_level,
-        null,
-        null,
-        null,
-        null,
-        null,
+        scores.emotional_exhaustion_score,
+        scores.depersonalization_score,
+        scores.personal_accomplishment_score,
+        scores.initial_burnout_score,
+        scores.initial_burnout_level,
         profile.wellness_goals,
         profile.height_cm,
         profile.weight_kg,
@@ -765,6 +766,8 @@ export async function submitRequiredOnboarding(payload, { db = pool, now = new D
 
     const savedProfile = profileResult.rows[0];
     const user = userResult.rows[0];
+
+    await ensureBaselineEpochForDate(client, userId, formatDateOnly(new Date()));
 
     await ensureDefaultNutritionCalorieGoal({
       client,
@@ -899,7 +902,8 @@ export async function submitRequiredOnboarding(payload, { db = pool, now = new D
       message: 'Onboarding submitted successfully',
       onboarding_completed: true,
       profile: savedProfile,
-      ...assessmentResult
+      scores,
+      baseline_for_ai: buildAiBaseline(savedProfile)
     };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -909,8 +913,143 @@ export async function submitRequiredOnboarding(payload, { db = pool, now = new D
   }
 }
 
-export async function updateUserBurnoutBaseline() {
-  rejectLegacyScoring();
+export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
+  const userId = parseUserId(userIdValue);
+  const burnoutAnswers = buildBurnoutAnswerRecords(payload?.burnout_answers);
+  const scores = calculateBurnoutBaselineScore(burnoutAnswers);
+  const clientRefreshId = normalizeText(payload?.client_refresh_id);
+  if (
+    clientRefreshId != null &&
+    (clientRefreshId.length > 100 ||
+      !/^[A-Za-z0-9_-]{8,100}$/.test(clientRefreshId))
+  ) {
+    throw new OnboardingServiceError('Valid client_refresh_id is required');
+  }
+  const today = payload?.baseline_date == null
+    ? formatDateOnly(new Date())
+    : normalizeDateOnly(payload.baseline_date, 'baseline_date');
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const userResult = await client.query(
+      'SELECT user_id FROM users WHERE user_id = $1 FOR UPDATE',
+      [userId]
+    );
+
+    if (userResult.rowCount === 0) {
+      throw new OnboardingServiceError('User not found', 404);
+    }
+
+    const profileResult = await client.query(
+      `UPDATE user_onboarding_profiles
+       SET emotional_exhaustion_score = $2,
+           depersonalization_score = $3,
+           personal_accomplishment_score = $4,
+           initial_burnout_score = $5,
+           initial_burnout_level = $6,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = $1
+       RETURNING
+         id,
+         user_id,
+         role,
+         lifestyle_type,
+         wellness_goal,
+         wellness_goals,
+         height_cm,
+         weight_kg,
+         bmi,
+         to_char(usual_sleep_time, 'HH24:MI') AS usual_sleep_time,
+         to_char(usual_wake_time, 'HH24:MI') AS usual_wake_time,
+         exercise_goal_days,
+         workload_level,
+         has_extra_responsibilities,
+         extra_responsibility_level,
+         emotional_exhaustion_score,
+         depersonalization_score,
+         personal_accomplishment_score,
+         initial_burnout_score,
+         initial_burnout_level,
+         created_at,
+         updated_at`,
+      [
+        userId,
+        scores.emotional_exhaustion_score,
+        scores.depersonalization_score,
+        scores.personal_accomplishment_score,
+        scores.initial_burnout_score,
+        scores.initial_burnout_level
+      ]
+    );
+
+    if (profileResult.rowCount === 0) {
+      throw new OnboardingServiceError('Onboarding profile not found', 404);
+    }
+
+    const returnContextResult = await client.query(
+      `SELECT
+         (SELECT MAX(log_date) FROM daily_logs WHERE user_id = $1)
+           AS last_logged_date,
+         (
+           SELECT started_at
+           FROM user_baseline_epochs
+           WHERE user_id = $1 AND ended_at IS NULL
+           ORDER BY started_at DESC, baseline_epoch_id DESC
+           LIMIT 1
+         ) AS baseline_epoch_started_at`,
+      [userId]
+    );
+    const returnContext = returnContextResult.rows[0] ?? {};
+    const returnState = detectReturnState({
+      lastLoggedDate: returnContext.last_logged_date,
+      localDate: today,
+      baselineEpochStartedAt: returnContext.baseline_epoch_started_at
+    });
+
+    await insertAnswerRecords(client, userId, burnoutAnswers);
+
+    const baselineEpoch = await startBaselineEpoch(client, userId, {
+      startedAt: today,
+      resetReason: returnState.requires_baseline_refresh
+        ? 'thirty_day_return'
+        : 'manual_baseline_refresh',
+      clientRefreshId
+    });
+    const refreshStartDate = baselineEpoch.startedAt > addDays(today, -27)
+      ? baselineEpoch.startedAt
+      : addDays(today, -27);
+
+    const refreshedScores = await upsertBurnoutScoresForRange(
+      client,
+      userId,
+      refreshStartDate,
+      today
+    );
+    const latestScore = await getLatestBurnoutScore(client, userId);
+
+    await client.query('COMMIT');
+
+    const savedProfile = profileResult.rows[0];
+
+    return {
+      message: 'Burnout baseline updated successfully',
+      profile: savedProfile,
+      scores,
+      baseline_epoch_id: baselineEpoch.baselineEpochId,
+      client_refresh_id: baselineEpoch.clientRefreshId,
+      baseline_refresh_reason: baselineEpoch.resetReason,
+      baseline_for_ai: buildAiBaseline(savedProfile),
+      latest_score: latestScore,
+      refreshed_scores_count: refreshedScores.length
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getOnboardingStatus(userIdValue) {

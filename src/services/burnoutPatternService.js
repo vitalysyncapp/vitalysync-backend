@@ -1,5 +1,6 @@
 import {
-  formatBurnoutScoreRow
+  formatBurnoutScoreRow,
+  upsertBurnoutScoresForRange
 } from './burnoutScoringService.js';
 import { BURNOUT_SCORING_VERSION } from './burnoutEvidencePolicy.js';
 
@@ -685,10 +686,19 @@ export function analyzeBurnoutPatterns(scores, endDate) {
 export async function getBurnoutPatternSummary(
   client,
   userId,
-  { endDate } = {}
+  { endDate, refreshScores = true } = {}
 ) {
   const normalizedEndDate = formatDateOnly(endDate ?? new Date());
+  const refreshStartDate = addDays(normalizedEndDate, -(MAX_WINDOW_DAYS - 1));
 
+  if (refreshScores) {
+    await upsertBurnoutScoresForRange(
+      client,
+      userId,
+      refreshStartDate,
+      normalizedEndDate
+    );
+  }
 
   const scores = await loadScoresForPattern(client, userId, normalizedEndDate);
   const epochResult = await client.query(

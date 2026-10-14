@@ -30,19 +30,223 @@ function reportRowFromParams(params, id = 1) {
 
 function createInsightReportClient({ dailyData = false, weeklyData = false } = {}) {
   const inserts = [];
-  return { inserts, async query(sql, params = []) {
-    if (sql.includes('INSERT INTO user_insight_reports')) {
-      inserts.push({ sql, params });
-      return { rowCount: 1, rows: [reportRowFromParams(params, inserts.length)] };
+
+  return {
+    inserts,
+    async query(sql, params) {
+      if (sql.includes('INSERT INTO user_insight_reports')) {
+        inserts.push({ sql, params });
+        return {
+          rowCount: 1,
+          rows: [reportRowFromParams(params, inserts.length)]
+        };
+      }
+
+      if (
+        sql.includes('FROM daily_logs') &&
+        sql.includes('log_date BETWEEN')
+      ) {
+        return {
+          rows: weeklyData
+            ? [
+                {
+                  log_date: '2026-05-18',
+                  sleep_hours: 6.5,
+                  mood_index: 3,
+                  energy_level: 5,
+                  hydration_liters: 2.1,
+                  exercise_names: ['Walking'],
+                  symptom_names: ['None'],
+                  habit_names: ['Quiet break'],
+                  exercise_goal_completed: true
+                }
+              ]
+            : []
+        };
+      }
+
+      if (
+        sql.includes('FROM daily_logs') &&
+        sql.includes('log_date = $2')
+      ) {
+        return {
+          rows: dailyData
+            ? [
+                {
+                  log_id: 1,
+                  log_date: params[1],
+                  sleep_hours: 5.5,
+                  sleep_quality: 2,
+                  mood_index: 2,
+                  energy_level: 3,
+                  hydration_liters: 1.2,
+                  workload_hours_band: '8-9 hours',
+                  exercise_names: ['Walking'],
+                  symptom_names: ['Headache'],
+                  habit_names: ['Quiet break'],
+                  exercise_goal_name: 'Walking',
+                  exercise_goal_completed: false,
+                  exercise_goal_status: 'active',
+                  updated_at: new Date().toISOString()
+                }
+              ]
+            : []
+        };
+      }
+
+      if (
+        sql.includes('FROM daily_activity_logs') &&
+        sql.includes('log_date BETWEEN')
+      ) {
+        return {
+          rows: weeklyData
+            ? [
+                {
+                  log_date: '2026-05-18',
+                  steps: 6400,
+                  active_minutes: 38,
+                  goal_completed: true
+                }
+              ]
+            : []
+        };
+      }
+
+      if (
+        sql.includes('FROM daily_activity_logs') &&
+        sql.includes('log_date = $2')
+      ) {
+        return {
+          rows: dailyData
+            ? [
+                {
+                  log_date: params[1],
+                  steps: 3400,
+                  active_minutes: 18,
+                  calories_burned: 120,
+                  goal_steps: 5000,
+                  goal_completed: false,
+                  updated_at: new Date().toISOString()
+                }
+              ]
+            : []
+        };
+      }
+
+      if (sql.includes('FROM daily_exercise_goals')) {
+        return {
+          rows: dailyData
+            ? [
+                {
+                  log_date: params[1],
+                  exercise_name: 'Walking',
+                  exercise_category: 'cardio',
+                  status: 'active',
+                  completed_at: null,
+                  updated_at: new Date().toISOString()
+                }
+              ]
+            : []
+        };
+      }
+
+      if (
+        sql.includes('FROM nutrition_logs') &&
+        sql.includes('log_date BETWEEN')
+      ) {
+        return {
+          rows: weeklyData
+            ? [
+                {
+                  log_date: '2026-05-18',
+                  total_calories: 1800,
+                  meal_count: 3
+                }
+              ]
+            : []
+        };
+      }
+
+      if (
+        sql.includes('FROM nutrition_logs') &&
+        sql.includes('log_date = $2')
+      ) {
+        return {
+          rows: dailyData
+            ? [
+                {
+                  log_date: params[1],
+                  total_calories: 1450,
+                  total_protein_g: 70,
+                  total_carbs_g: 160,
+                  total_fat_g: 45,
+                  meal_count: 3
+                }
+              ]
+            : []
+        };
+      }
+
+      if (sql.includes('FROM weekly_pulse_responses')) {
+        return {
+          rows: weeklyData
+            ? [
+                {
+                  week_start_date: params[1],
+                  due_date: params[1],
+                  response_date: params[1],
+                  perceived_pressure_level: 4,
+                  productivity_focus_level: 3,
+                  recovery_rest_level: 4,
+                  detachment_level: 2,
+                  accomplishment_level: 3,
+                  updated_at: new Date().toISOString()
+                }
+              ]
+            : []
+        };
+      }
+
+      if (
+        sql.includes('FROM burnout_score_history') &&
+        sql.includes('score_date BETWEEN')
+      ) {
+        return {
+          rows: weeklyData
+            ? [
+                {
+                  score_date: '2026-05-18',
+                  overall_score: 42,
+                  risk_level: 'moderate',
+                  confidence_score: 80
+                }
+              ]
+            : []
+        };
+      }
+
+      if (
+        sql.includes('FROM burnout_score_history') &&
+        sql.includes('score_date = $2')
+      ) {
+        return {
+          rows: dailyData
+            ? [
+                {
+                  score_date: params[1],
+                  overall_score: 68,
+                  risk_level: 'moderate',
+                  confidence_score: 85,
+                  updated_at: new Date().toISOString()
+                }
+              ]
+            : []
+        };
+      }
+
+      return { rows: [] };
     }
-    if (sql.includes('burnout_score_history') || /UPDATE.*user_assessments/.test(sql)) assert.fail('Reports must not query legacy scores or mutate CBI');
-    if (sql.includes('FROM users')) return { rows: [{ age: 25 }] };
-    const date = weeklyData ? '2026-05-18' : '2026-05-21';
-    const inRange = (dailyData || weeklyData) && params[1] <= date && params[2] >= date;
-    if (sql.includes('FROM daily_logs')) return { rows: inRange ? [{ log_date: date, sleep_hours: dailyData ? 5.5 : 6.5, energy_level: 3, hydration_liters: 0 }] : [] };
-    if (sql.includes('FROM weekly_pulse_responses')) return { rows: weeklyData && inRange ? [{ response_date: date, perceived_pressure_level: 4, productivity_focus_level: 3, detachment_level: 2, accomplishment_level: 4, schema_version: 2 }] : [] };
-    return { rows: [] };
-  } };
+  };
 }
 
 test('insight report refresh validates user id before database work', async () => {
@@ -75,12 +279,11 @@ test('daily insight report refresh inserts yesterday-context report once', async
   assert.equal(reports.length, 1);
   assert.equal(reports[0].report_type, 'daily');
   assert.equal(reports[0].period_start, '2026-05-21');
-  assert.equal(reports[0].metrics.observations.energy_level.mean, 3);
-  assert.equal(reports[0].metrics.observations.sleep_hours.mean, 5.5);
+  assert.equal(reports[0].metrics.energy_level, 3);
+  assert.equal(reports[0].metrics.sleep_hours, 5.5);
   assert.equal(reports[0].metrics.daily_detachment_level, undefined);
-  assert.match(reports[0].summary, /1 daily log/);
-  assert.doesNotMatch(reports[0].summary, /risk|dimension|critical/i);
-  assert.equal(reports[0].metrics.observations.hydration_liters.mean, 0);
+  assert.match(reports[0].summary, /Yesterday's short check-in/);
+  assert.match(reports[0].summary, /weekly dimension context/i);
   assert.equal(client.inserts.length, 1);
   assert.match(client.inserts[0].sql, /ON CONFLICT[\s\S]*DO NOTHING/);
 });
@@ -187,7 +390,7 @@ test('weekly insight report refresh skips non-Sunday dates', async () => {
   assert.equal(client.inserts.length, 0);
 });
 
-test('weekly insight report refresh inserts once on Sunday', async () => {
+test('weekly insight report refresh upserts a weekly report on Sunday', async () => {
   const client = createInsightReportClient({ weeklyData: true });
 
   const reports = await refreshInsightReports(client, 1, {
@@ -198,12 +401,12 @@ test('weekly insight report refresh inserts once on Sunday', async () => {
   assert.equal(reports[0].report_type, 'weekly');
   assert.equal(reports[0].period_start, '2026-05-18');
   assert.equal(reports[0].period_end, '2026-05-24');
-  assert.equal(reports[0].source_snapshot.weekly_reflections[0].perceived_pressure_level, 4);
-  assert.equal(reports[0].source_snapshot.weekly_reflections[0].productivity_focus_level, 3);
-  assert.equal(reports[0].source_snapshot.weekly_reflections[0].detachment_level, 2);
+  assert.equal(reports[0].metrics.weekly_perceived_pressure_level, 4);
+  assert.equal(reports[0].metrics.weekly_productivity_focus_level, 3);
+  assert.equal(reports[0].metrics.weekly_detachment_level, 2);
   assert.equal(reports[0].metrics.average_daily_detachment_level, undefined);
-  assert.equal(reports[0].metrics.weekly_reflection_count, 1);
-  assert.equal(reports[0].metrics.policy_version, 'cbi-wellness-1.0.0');
+  assert.match(reports[0].summary, /weekly pulse: pressure 4\/5/);
+  assert.match(reports[0].summary, /focus 3\/5/);
 });
 
 test('insight report listing requests newest reports first', async () => {

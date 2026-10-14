@@ -498,7 +498,6 @@ export async function refreshInsightReports(req, res) {
 
 export async function getNudgeRecommendations(req, res) {
   const userId = getRequestUserId(req, req.query.user_id);
-  const endDate = String(req.query.date ?? new Date().toISOString().slice(0, 10));
   const limit = parseLimitedInt(req.query.limit, 3, 5);
   const recordShown = req.query.record == null
     ? true
@@ -509,12 +508,6 @@ export async function getNudgeRecommendations(req, res) {
 
   if (!userId) {
     return res.status(400).json({ message: 'Valid user_id is required' });
-  }
-
-  const parsedDate = new Date(`${endDate}T00:00:00Z`);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate) ||
-      !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== endDate) {
-    return res.status(400).json({ message: 'Valid local date is required' });
   }
 
   if (recordShown === undefined) {
@@ -532,7 +525,6 @@ export async function getNudgeRecommendations(req, res) {
     }
 
     const result = await getAdaptiveNudgeRecommendations(pool, userId, {
-      endDate,
       limit,
       recordShown,
       useAi,
@@ -543,10 +535,8 @@ export async function getNudgeRecommendations(req, res) {
     return res.status(200).json({
       recommendations: result.recommendations,
       primary_recommendation: primaryRecommendation,
-      policy_version: result.summary.policy_version,
-      wellness_summary: result.summary,
-      adaptive_state: {},
-      patterns: [],
+      adaptive_state: result.summary.adaptive_state,
+      patterns: result.summary.patterns,
       ai_enhanced: result.recommendations.some(
         (recommendation) => recommendation.metadata?.ai_enhanced === true
       ),

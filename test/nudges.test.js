@@ -444,7 +444,7 @@ test('low-confidence score states do not create urgent assistant nudges', () => 
   assert.equal(recommendation, null);
 });
 
-test('AI nudge context excludes old scores and unrelated profile data', () => {
+test('AI nudge context carries personal context and keeps username in message locally', () => {
   const personalized = personalizeNudgeRecommendation(
     recommendation({ nudgeType: 'small_win', recommendedFocus: 'progress' }),
     {
@@ -467,10 +467,16 @@ test('AI nudge context excludes old scores and unrelated profile data', () => {
     feedbackPreferences
   );
 
-  assert.equal(context.burnout_context, undefined);
-  assert.equal(context.personal_context, undefined);
-  assert.equal(context.guardrails.do_not_change_action_observation_sources_or_trigger, true);
-  assert.equal(context.guardrails.do_not_calculate_scores_or_infer_diagnoses, true);
+  assert.equal(context.personal_context.user_display_name, 'Alex');
+  assert.equal(context.personal_context.profile.workload_level, 4);
+  assert.equal(
+    context.personal_context.visible_personalization.use_username_once_when_available,
+    true
+  );
+  assert.equal(context.guardrails.do_not_change_priority_or_risk, true);
+  assert.equal(context.guardrails.do_not_reference_email_age_or_gender, true);
+  assert.equal(context.guardrails.message_max_characters, 140);
+  assert.equal(context.guardrails.use_one_concrete_action, true);
   assert.match(ensureNameInMessage('Take one small step.', 'Alex'), /^Alex, /);
 });
 
