@@ -167,6 +167,12 @@ async function buildDailyReport(client, userId, date) {
       `SELECT
          log_id,
          log_date,
+         questionnaire_version,
+         perceived_stress_level,
+         break_quality_level,
+         daily_detachment_level,
+         daily_focus_level,
+         daily_accomplishment_level,
          sleep_hours,
          sleep_quality,
          mood_index,
@@ -228,6 +234,7 @@ async function buildDailyReport(client, userId, date) {
          overall_score,
          risk_level,
          confidence_score,
+         scoring_version,
          updated_at
        FROM burnout_score_history
        WHERE user_id = $1 AND score_date = $2
@@ -323,7 +330,8 @@ async function buildWeeklyReport(client, userId, weekStart) {
     activityResult,
     nutritionResult,
     weeklyPulseResult,
-    burnoutResult
+    burnoutResult,
+    weeklyAssessmentResult
   ] = await Promise.all([
     client.query(
       `SELECT
@@ -396,9 +404,15 @@ async function buildWeeklyReport(client, userId, weekStart) {
          AND score_date BETWEEN $2 AND $3
        ORDER BY score_date ASC`,
       [userId, weekStart, weekEnd]
+    ),
+    client.query(
+      `SELECT response_date, questionnaire_version, scores FROM weekly_burnout_assessments
+       WHERE user_id = $1 AND response_date BETWEEN $2 AND $3
+       ORDER BY response_date DESC LIMIT 1`, [userId, weekStart, weekEnd]
     )
   ]);
 
+  const weeklyAssessment = weeklyAssessmentResult.rows[0] ?? null;
   const logs = logsResult.rows;
   const activityLogs = activityResult.rows;
   const nutritionDays = nutritionResult.rows;
@@ -409,7 +423,7 @@ async function buildWeeklyReport(client, userId, weekStart) {
     logs.length === 0 &&
     activityLogs.length === 0 &&
     nutritionDays.length === 0 &&
-    !weeklyPulse &&
+    !weeklyPulse && !weeklyAssessment &&
     burnoutScores.length === 0
   ) {
     return null;
@@ -477,7 +491,8 @@ async function buildWeeklyReport(client, userId, weekStart) {
     average_burnout_score: averageBurnout,
     latest_burnout_score: latestBurnoutScore,
     latest_burnout_risk_level: latestBurnout?.risk_level ?? null,
-    weekly_pulse_completed: weeklyPulse != null
+    weekly_pulse_completed: weeklyPulse != null,
+    weekly_questionnaire: weeklyAssessment
   };
 
   return {
@@ -494,7 +509,8 @@ async function buildWeeklyReport(client, userId, weekStart) {
       mealLoggedDays,
       latestBurnoutScore,
       latestBurnoutRisk: latestBurnout?.risk_level ?? null,
-      weeklyPulse
+      weeklyPulse,
+      weeklyAssessment
     }),
     priority: weeklyPriority({
       loggedDays,
@@ -509,6 +525,7 @@ async function buildWeeklyReport(client, userId, weekStart) {
       activity_logs: activityLogs,
       nutrition_days: nutritionDays,
       weekly_pulse: weeklyPulse,
+      weekly_questionnaire: weeklyAssessment,
       burnout_scores: burnoutScores
     }
   };
@@ -700,6 +717,9 @@ function dailySummary({
   riskLevel
 }) {
   if (burnout) {
+    if (['burnout_engine_v5_daily14_v1', 'burnout_engine_v6_core9_v1'].includes(burnout.scoring_version)) {
+      return `Your daily wellness estimate is ${burnoutScore}/100. Yesterday's daily log shows ${sleepHours || '--'}h sleep, ${log?.energy_level ?? '--'}/5 energy, ${log?.mood_index == null ? '--' : toInteger(log.mood_index) + 1}/5 mood, and ${hydrationLiters || '--'}L hydration. Weekly questionnaire dimensions are recorded separately.`;
+    }
     return `Burnout risk is ${riskLevel} at ${burnoutScore}/100. Yesterday's short check-in shows ${sleepHours || '--'}h sleep, ${log?.energy_level ?? '--'}/5 energy, ${log?.mood_index == null ? '--' : toInteger(log.mood_index) + 1}/5 mood, and ${hydrationLiters || '--'}L hydration. Weekly dimension context is included in the score when available.`;
   }
 
@@ -710,7 +730,7 @@ function dailySummary({
     const habitText = habits.length > 0
       ? `${habits.length} recovery habit${habits.length === 1 ? '' : 's'}`
       : 'no recovery habits logged';
-    return `Yesterday's short log shows ${sleepHours}h sleep, ${log.energy_level ?? '--'}/5 energy, ${hydrationLiters || '--'}L hydration, ${symptomText}, and ${habitText}.`;
+    return `Yesterday's daily log shows ${sleepHours}h sleep, ${log.energy_level ?? '--'}/5 energy, ${hydrationLiters || '--'}L hydration, ${symptomText}, and ${habitText}.`;
   }
 
   if (activity || nutrition) {
@@ -729,14 +749,17 @@ function weeklySummary({
   mealLoggedDays,
   latestBurnoutScore,
   latestBurnoutRisk,
-  weeklyPulse
+  weeklyPulse,
+  weeklyAssessment
 }) {
   const burnoutText = latestBurnoutScore == null
     ? 'No burnout score trend is available yet'
     : `Latest burnout risk is ${latestBurnoutRisk} at ${latestBurnoutScore}/100`;
-  const pulseText = weeklyPulse
-    ? `weekly pulse: pressure ${weeklyPulse.perceived_pressure_level}/5, recovery ${weeklyPulse.recovery_rest_level}/5, detachment ${weeklyPulse.detachment_level}/5, focus ${weeklyPulse.productivity_focus_level}/5, and accomplishment ${weeklyPulse.accomplishment_level}/5`
-    : 'weekly pulse is still pending';
+  const pulseText = weeklyAssessment
+    ? `weekly reflection: exhaustion ${weeklyAssessment.scores.emotional_exhaustion.mean}/5, detachment ${weeklyAssessment.scores.depersonalization.mean}/5, and accomplishment ${weeklyAssessment.scores.personal_accomplishment.mean}/5 (higher accomplishment is positive)`
+    : weeklyPulse
+    ? `legacy weekly pulse: pressure ${weeklyPulse.perceived_pressure_level}/5, recovery ${weeklyPulse.recovery_rest_level}/5, detachment ${weeklyPulse.detachment_level}/5, focus ${weeklyPulse.productivity_focus_level}/5, and accomplishment ${weeklyPulse.accomplishment_level}/5`
+    : 'weekly reflection is still pending';
 
-  return `${burnoutText}. This week has ${loggedDays}/7 short daily logs, ${averageSleep || '--'}h average sleep, ${averageHydration || '--'}L average hydration, ${exerciseDays} movement day${exerciseDays === 1 ? '' : 's'}, and ${pulseText}.`;
+  return `${burnoutText}. This week has ${loggedDays}/7 daily logs, ${averageSleep || '--'}h average sleep, ${averageHydration || '--'}L average hydration, ${exerciseDays} movement day${exerciseDays === 1 ? '' : 's'}, and ${pulseText}.`;
 }

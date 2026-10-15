@@ -37,6 +37,7 @@ export const USER_OWNED_TABLES = Object.freeze([
   'user_reminder_preferences',
   'nudge_events',
   'weekly_pulse_responses',
+  'weekly_burnout_assessments',
   'daily_exercise_goals',
   'daily_activity_logs',
   'nutrition_attempts',

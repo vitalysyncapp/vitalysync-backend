@@ -16,6 +16,9 @@ function validationError(message, code = 'INVALID_CHECK_IN') {
 }
 
 function normalizeInteger(value, minimum, maximum, fieldName) {
+  if (value == null || value === '' || typeof value === 'boolean') {
+    throw validationError(`Valid ${fieldName} is required`);
+  }
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
     throw validationError(`Valid ${fieldName} is required`);
@@ -24,6 +27,9 @@ function normalizeInteger(value, minimum, maximum, fieldName) {
 }
 
 function normalizeNumber(value, minimum, maximum, fieldName) {
+  if (value == null || value === '' || typeof value === 'boolean') {
+    throw validationError(`Valid ${fieldName} is required`);
+  }
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
     throw validationError(`Valid ${fieldName} is required`);
@@ -93,7 +99,25 @@ export function normalizeDailyCheckIn(payload) {
     throw validationError('Valid workload_hours_band is required');
   }
 
+  const coreOnly = payload.schema_version === 3 &&
+    daily.questionnaire_version === 'daily_core9_v3';
+  if (payload.schema_version === 3 &&
+      !['daily_core9_v3', 'daily_14_v2'].includes(daily.questionnaire_version)) {
+    throw validationError('Unsupported daily questionnaire version');
+  }
+  const reflectionFields = ['perceived_stress_level', 'break_quality_level',
+    'daily_detachment_level', 'daily_focus_level', 'daily_accomplishment_level'];
+  if (coreOnly && reflectionFields.some((key) => daily[key] != null)) {
+    throw validationError('Weekly-day daily logs must omit the five daily reflection answers');
+  }
+
   return {
+    questionnaire_version: coreOnly ? 'daily_core9_v3'
+      : payload.schema_version >= 2 ? 'daily_14_v2' : 'daily_legacy_v1',
+    ...Object.fromEntries(reflectionFields.map((key) => [
+      key, !coreOnly && (payload.schema_version >= 2 || daily[key] != null)
+        ? normalizeInteger(daily[key], 1, 5, key) : null
+    ])),
     sleep_hours: normalizeNumber(daily.sleep_hours, 0, 24, 'sleep_hours'),
     sleep_quality: normalizeInteger(daily.sleep_quality, 0, 4, 'sleep_quality'),
     mood_index: normalizeInteger(daily.mood_index, 0, 4, 'mood_index'),

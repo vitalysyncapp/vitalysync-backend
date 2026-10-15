@@ -1,4 +1,5 @@
 import express from 'express';
+import { getWeeklyAssessment, saveWeeklyAssessment } from '../controllers/weeklyAssessment.controller.js';
 
 import {
   getUnifiedCheckInStatus,
@@ -16,6 +17,9 @@ import {
 } from '../controllers/log.controller.js';
 
 const router = express.Router();
+
+router.get('/weekly-assessment', getWeeklyAssessment);
+router.post('/weekly-assessment', saveWeeklyAssessment);
 
 router.get('/check-in/status', getUnifiedCheckInStatus);
 router.post('/check-in', saveUnifiedCheckIn);

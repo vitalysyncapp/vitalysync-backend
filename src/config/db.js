@@ -3,6 +3,10 @@ import pg from 'pg';
 import dotenv from 'dotenv';
 dotenv.config();
 
+// PostgreSQL DATE values are calendar days, not instants. Keeping YYYY-MM-DD
+// prevents a local-midnight Date from shifting a log or due date through UTC.
+pg.types.setTypeParser(pg.types.builtins.DATE, (value) => value);
+
 const DEFAULT_IDLE_TIMEOUT_MS = 30000;
 const DEFAULT_CONNECTION_TIMEOUT_MS = 10000;
 const DEFAULT_POOL_MAX = 10;

@@ -1,3 +1,4 @@
+import { questionsForVersion, normalizeBurnoutAnswers, LEGACY_BASELINE_VERSION, BURNOUT_QUESTIONNAIRE_VERSION } from './burnoutQuestionnaire.js';
 import pool from '../config/db.js';
 import {
   calculateBurnoutBaselineScore,
@@ -55,98 +56,7 @@ const HEIGHT_CM_MAX = 250;
 const WEIGHT_KG_MIN = 20;
 const WEIGHT_KG_MAX = 500;
 
-const BURNOUT_QUESTIONS = [
-  {
-    question_key: 'ee_01',
-    question_text: 'I feel emotionally drained by my daily responsibilities.',
-    category: 'emotional_exhaustion',
-    is_reverse_scored: false
-  },
-  {
-    question_key: 'ee_02',
-    question_text: 'I feel tired even before starting my day.',
-    category: 'emotional_exhaustion',
-    is_reverse_scored: false
-  },
-  {
-    question_key: 'ee_03',
-    question_text: 'I feel overwhelmed by my tasks.',
-    category: 'emotional_exhaustion',
-    is_reverse_scored: false
-  },
-  {
-    question_key: 'ee_04',
-    question_text: 'I feel fatigued most of the time.',
-    category: 'emotional_exhaustion',
-    is_reverse_scored: false
-  },
-  {
-    question_key: 'ee_05',
-    question_text: 'I feel I have no energy left at the end of the day.',
-    category: 'emotional_exhaustion',
-    is_reverse_scored: false
-  },
-  {
-    question_key: 'dp_01',
-    question_text: 'I feel detached from my responsibilities.',
-    category: 'depersonalization',
-    is_reverse_scored: false
-  },
-  {
-    question_key: 'dp_02',
-    question_text: 'I have become less interested in things I used to enjoy.',
-    category: 'depersonalization',
-    is_reverse_scored: false
-  },
-  {
-    question_key: 'dp_03',
-    question_text: 'I feel indifferent toward my tasks.',
-    category: 'depersonalization',
-    is_reverse_scored: false
-  },
-  {
-    question_key: 'dp_04',
-    question_text: 'I feel less emotionally connected to others.',
-    category: 'depersonalization',
-    is_reverse_scored: false
-  },
-  {
-    question_key: 'dp_05',
-    question_text: 'I sometimes feel like I’m just going through the motions.',
-    category: 'depersonalization',
-    is_reverse_scored: false
-  },
-  {
-    question_key: 'pa_01',
-    question_text: 'I feel productive in my daily life.',
-    category: 'personal_accomplishment',
-    is_reverse_scored: true
-  },
-  {
-    question_key: 'pa_02',
-    question_text: 'I feel I am achieving meaningful results.',
-    category: 'personal_accomplishment',
-    is_reverse_scored: true
-  },
-  {
-    question_key: 'pa_03',
-    question_text: 'I feel confident handling my responsibilities.',
-    category: 'personal_accomplishment',
-    is_reverse_scored: true
-  },
-  {
-    question_key: 'pa_04',
-    question_text: 'I feel motivated to accomplish my goals.',
-    category: 'personal_accomplishment',
-    is_reverse_scored: true
-  },
-  {
-    question_key: 'pa_05',
-    question_text: 'I feel satisfied with what I achieve each day.',
-    category: 'personal_accomplishment',
-    is_reverse_scored: true
-  }
-];
+
 
 export class OnboardingServiceError extends Error {
   constructor(message, statusCode = 400) {
@@ -415,7 +325,17 @@ function normalizeProfile(profile = {}) {
   };
 }
 
-function buildBurnoutAnswerRecords(burnoutAnswers) {
+function buildBurnoutAnswerRecords(burnoutAnswers, version = LEGACY_BASELINE_VERSION) {
+  let questions;
+  try {
+    if (![LEGACY_BASELINE_VERSION, BURNOUT_QUESTIONNAIRE_VERSION].includes(version)) {
+      throw new Error('The baseline requires the 22-item questionnaire');
+    }
+    questions = questionsForVersion(version);
+    if (version !== LEGACY_BASELINE_VERSION) normalizeBurnoutAnswers(burnoutAnswers, version);
+  } catch (error) {
+    throw new OnboardingServiceError(error.message);
+  }
   const answerMap = new Map(
     (Array.isArray(burnoutAnswers) ? burnoutAnswers : []).map((answer) => [
       String(answer?.question_key ?? answer?.key ?? '').trim(),
@@ -423,7 +343,7 @@ function buildBurnoutAnswerRecords(burnoutAnswers) {
     ])
   );
 
-  return BURNOUT_QUESTIONS.map((question) => {
+  return questions.map((question) => {
     const submittedAnswer = answerMap.get(question.question_key);
     const numericValue = parseLikert(
       submittedAnswer?.numeric_value ?? submittedAnswer?.value,
@@ -673,8 +593,9 @@ async function insertAnswerRecords(client, userId, answerRecords) {
 export async function submitRequiredOnboarding(payload) {
   const userId = parseUserId(payload?.user_id);
   const profile = normalizeProfile(payload?.profile);
-  const burnoutAnswers = buildBurnoutAnswerRecords(payload?.burnout_answers);
-  const scores = calculateBurnoutBaselineScore(burnoutAnswers);
+  const version = payload?.questionnaire_version ?? LEGACY_BASELINE_VERSION;
+  const burnoutAnswers = buildBurnoutAnswerRecords(payload?.burnout_answers, version);
+  const scores = calculateBurnoutBaselineScore(burnoutAnswers, version);
   const answerRecords = [
     ...buildProfileAnswerRecords(profile),
     ...burnoutAnswers
@@ -713,11 +634,12 @@ export async function submitRequiredOnboarding(payload) {
          wellness_goals,
          height_cm,
          weight_kg,
-         bmi
+         bmi,
+         burnout_questionnaire_version
        )
        VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-         $11, $12, $13, $14, $15, $16, $17, $18, $19
+         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
        )
        ON CONFLICT (user_id)
        DO UPDATE SET
@@ -739,6 +661,7 @@ export async function submitRequiredOnboarding(payload) {
          personal_accomplishment_score = EXCLUDED.personal_accomplishment_score,
          initial_burnout_score = EXCLUDED.initial_burnout_score,
          initial_burnout_level = EXCLUDED.initial_burnout_level,
+         burnout_questionnaire_version = EXCLUDED.burnout_questionnaire_version,
          updated_at = CURRENT_TIMESTAMP
        RETURNING *`,
       [
@@ -760,7 +683,8 @@ export async function submitRequiredOnboarding(payload) {
         profile.wellness_goals,
         profile.height_cm,
         profile.weight_kg,
-        profile.bmi
+        profile.bmi,
+        version
       ]
     );
 
@@ -915,8 +839,9 @@ export async function submitRequiredOnboarding(payload) {
 
 export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
   const userId = parseUserId(userIdValue);
-  const burnoutAnswers = buildBurnoutAnswerRecords(payload?.burnout_answers);
-  const scores = calculateBurnoutBaselineScore(burnoutAnswers);
+  const version = payload?.questionnaire_version ?? LEGACY_BASELINE_VERSION;
+  const burnoutAnswers = buildBurnoutAnswerRecords(payload?.burnout_answers, version);
+  const scores = calculateBurnoutBaselineScore(burnoutAnswers, version);
   const clientRefreshId = normalizeText(payload?.client_refresh_id);
   if (
     clientRefreshId != null &&
@@ -949,6 +874,7 @@ export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
            personal_accomplishment_score = $4,
            initial_burnout_score = $5,
            initial_burnout_level = $6,
+           burnout_questionnaire_version = $7,
            updated_at = CURRENT_TIMESTAMP
        WHERE user_id = $1
        RETURNING
@@ -972,6 +898,7 @@ export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
          personal_accomplishment_score,
          initial_burnout_score,
          initial_burnout_level,
+         burnout_questionnaire_version,
          created_at,
          updated_at`,
       [
@@ -980,7 +907,8 @@ export async function updateUserBurnoutBaseline(userIdValue, payload = {}) {
         scores.depersonalization_score,
         scores.personal_accomplishment_score,
         scores.initial_burnout_score,
-        scores.initial_burnout_level
+        scores.initial_burnout_level,
+        version
       ]
     );
 

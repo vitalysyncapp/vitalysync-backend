@@ -73,6 +73,7 @@ async function readTodayLog(client, userId, logDate) {
        user_id,
        log_date,
        sleep_hours,
+       questionnaire_version,
        sleep_quality,
        mood_index,
        energy_level,
@@ -153,11 +154,11 @@ async function persistDailyLog(
            energy_level = $6,
            hydration_liters = $7,
            workload_hours_band = $8,
-           perceived_stress_level = NULL,
-           break_quality_level = NULL,
-           daily_detachment_level = NULL,
-           daily_focus_level = NULL,
-           daily_accomplishment_level = NULL,
+           perceived_stress_level = COALESCE($17, perceived_stress_level),
+           break_quality_level = COALESCE($18, break_quality_level),
+           daily_detachment_level = COALESCE($19, daily_detachment_level),
+           daily_focus_level = COALESCE($20, daily_focus_level),
+           daily_accomplishment_level = COALESCE($21, daily_accomplishment_level),
            exercise_names = $9,
            symptom_names = $10,
            exercise_goal_name = COALESCE($11, exercise_goal_name),
@@ -169,6 +170,7 @@ async function persistDailyLog(
              check_in_idempotency_key,
              $16
            ),
+           questionnaire_version = CASE WHEN $22 IN ('daily_14_v2', 'daily_core9_v3') THEN $22 ELSE questionnaire_version END,
            updated_at = NOW()
        WHERE user_id = $1 AND log_date = $2`,
       [
@@ -187,7 +189,13 @@ async function persistDailyLog(
         daily.exercise_goal_source,
         daily.exercise_goal_status,
         daily.habit_names,
-        idempotencyKey
+        idempotencyKey,
+        daily.perceived_stress_level,
+        daily.break_quality_level,
+        daily.daily_detachment_level,
+        daily.daily_focus_level,
+        daily.daily_accomplishment_level,
+        daily.questionnaire_version
       ]
     );
   } else {
@@ -223,12 +231,13 @@ async function persistDailyLog(
          exercise_goal_source,
          exercise_goal_status,
          habit_names,
-         check_in_idempotency_key
+         check_in_idempotency_key,
+         questionnaire_version
        )
        VALUES (
          $1, $2, $3, $4, $5, $6, $7, $8,
-         NULL, NULL, NULL, NULL, NULL,
-         $9, $10, $11, COALESCE($12, FALSE), $13, $14, $15::TEXT[], $16
+         $17, $18, $19, $20, $21,
+         $9, $10, $11, COALESCE($12, FALSE), $13, $14, $15::TEXT[], $16, $22
        )`,
       [
         userId,
@@ -246,7 +255,13 @@ async function persistDailyLog(
         daily.exercise_goal_source,
         daily.exercise_goal_status,
         daily.habit_names,
-        idempotencyKey
+        idempotencyKey,
+        daily.perceived_stress_level,
+        daily.break_quality_level,
+        daily.daily_detachment_level,
+        daily.daily_focus_level,
+        daily.daily_accomplishment_level,
+        daily.questionnaire_version
       ]
     );
 
@@ -345,7 +360,7 @@ async function persistWeeklyPulse(
   return result.rows[0];
 }
 
-export async function getCheckInStatus({ userId: rawUserId, logDate, database = pool }) {
+export async function getCheckInStatus({ userId: rawUserId, logDate, schemaVersion = 1, database = pool }) {
   const userId = normalizeUserId(rawUserId);
   const normalizedLogDate = normalizeCheckInDate(logDate);
   const client = await database.connect();
@@ -364,11 +379,23 @@ export async function getCheckInStatus({ userId: rawUserId, logDate, database = 
     }
 
     const dailyLog = await readTodayLog(client, userId, normalizedLogDate);
+    let dailyInputMode = 'daily';
+    if (schemaVersion === 3) {
+      const assessment = await client.query(
+        `SELECT assessment_id FROM weekly_burnout_assessments
+         WHERE user_id = $1 AND response_date = $2 LIMIT 1`,
+        [userId, normalizedLogDate]
+      );
+      dailyInputMode = schedule.isDue || schedule.isOverdue ||
+        assessment.rows.length > 0 || dailyLog?.questionnaire_version === 'daily_core9_v3'
+        ? 'weekly' : 'daily';
+    }
     await client.query('COMMIT');
     transactionOpen = false;
 
     return {
       required_mode: schedule.requiredMode,
+      ...(schemaVersion === 3 ? { daily_input_mode: dailyInputMode } : {}),
       has_today_log: dailyLog != null,
       ...publicBaselineRefresh(schedule),
       schedule: publicSchedule(schedule),
@@ -394,6 +421,10 @@ export async function submitCheckIn({
 }) {
   const userId = normalizeUserId(rawUserId);
   const logDate = normalizeCheckInDate(payload?.log_date);
+  const independentDaily = [2, 3].includes(payload?.schema_version);
+  if (payload?.schema_version != null && ![1, 2, 3].includes(payload.schema_version)) {
+    throw serviceError('Unsupported check-in schema version', 400, 'INVALID_CHECK_IN');
+  }
   const daily = normalizeDailyCheckIn(payload);
   const requestedMode = normalizeRequestedMode(
     payload?.check_in_type ?? payload?.mode
@@ -428,7 +459,7 @@ export async function submitCheckIn({
       );
     }
 
-    if (schedule.requiredMode === 'weekly' && requestedMode === 'daily') {
+    if (!independentDaily && schedule.requiredMode === 'weekly' && requestedMode === 'daily') {
       throw serviceError(
         'Weekly pulse is required before a short daily check-in can be saved',
         409,
@@ -445,7 +476,7 @@ export async function submitCheckIn({
       );
     }
 
-    const mode = schedule.requiredMode;
+    const mode = independentDaily ? 'daily' : schedule.requiredMode;
     if (mode === 'weekly' && !payload?.weekly) {
       throw serviceError(
         'Weekly pulse is required before a short daily check-in can be saved',
@@ -526,9 +557,9 @@ export async function submitCheckIn({
       weekly_pulse: weeklyPulse,
       schedule: {
         ...publicSchedule(schedule, nextDueDate),
-        is_due: false,
-        is_overdue: false,
-        completed_today: mode === 'weekly',
+        is_due: mode === 'weekly' ? false : schedule.isDue,
+        is_overdue: mode === 'weekly' ? false : schedule.isOverdue,
+        completed_today: mode === 'weekly' || schedule.completedToday,
         next_due_date: nextDueDate,
         last_completed_due_date: mode === 'weekly'
           ? schedule.dueDate

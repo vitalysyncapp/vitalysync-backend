@@ -1,3 +1,4 @@
+import { questionsForVersion, LEGACY_BASELINE_VERSION, normalizeBurnoutAnswers } from './burnoutQuestionnaire.js';
 import {
   BURNOUT_SCORING_VERSION,
   calculateBaselinePolicy
@@ -378,6 +379,11 @@ function presentFieldMap(inputs) {
   const weeklyPulse = inputs.weeklyPulse;
 
   return {
+    'daily_logs.perceived_stress_level': dailyLog?.perceived_stress_level,
+    'daily_logs.break_quality_level': dailyLog?.break_quality_level,
+    'daily_logs.daily_detachment_level': dailyLog?.daily_detachment_level,
+    'daily_logs.daily_focus_level': dailyLog?.daily_focus_level,
+    'daily_logs.daily_accomplishment_level': dailyLog?.daily_accomplishment_level,
     'daily_logs.sleep_hours': dailyLog?.sleep_hours,
     'daily_logs.sleep_quality': dailyLog?.sleep_quality,
     'daily_logs.mood_index': dailyLog?.mood_index,
@@ -401,7 +407,9 @@ function presentFieldMap(inputs) {
 
 function computeCompleteness(inputs) {
   const fieldMap = presentFieldMap(inputs);
-  const expectedFields = inputs.weeklyPulse
+  const expectedFields = inputs.dailyLog?.questionnaire_version === 'daily_14_v2'
+    ? [...EXPECTED_DAILY_SCORE_FIELDS, 'daily_logs.perceived_stress_level', 'daily_logs.break_quality_level', 'daily_logs.daily_detachment_level', 'daily_logs.daily_focus_level', 'daily_logs.daily_accomplishment_level']
+    : inputs.weeklyPulse
     ? [...EXPECTED_DAILY_SCORE_FIELDS, ...EXPECTED_WEEKLY_SCORE_FIELDS]
     : EXPECTED_DAILY_SCORE_FIELDS;
   const presentFields = expectedFields.filter((field) =>
@@ -432,21 +440,22 @@ function compactSourceSnapshot(inputs, risks, baselinePolicy) {
     week_start_date: inputs.weekStartDate,
     daily_log: dailyLog
       ? {
+          questionnaire_version: dailyLog.questionnaire_version ?? 'daily_legacy_v1',
           sleep_hours: toNumberOrNull(dailyLog.sleep_hours),
           sleep_quality: toIntegerOrNull(dailyLog.sleep_quality),
           mood_index: toIntegerOrNull(dailyLog.mood_index),
           energy_level: toIntegerOrNull(dailyLog.energy_level),
           hydration_liters: toNumberOrNull(dailyLog.hydration_liters),
           workload_hours_band: dailyLog.workload_hours_band,
-          perceived_stress_level: toIntegerOrNull(
+          perceived_stress_level: dailyLog.perceived_stress_level == null ? null : toIntegerOrNull(
             dailyLog.perceived_stress_level
           ),
-          break_quality_level: toIntegerOrNull(dailyLog.break_quality_level),
-          daily_detachment_level: toIntegerOrNull(
+          break_quality_level: dailyLog.break_quality_level == null ? null : toIntegerOrNull(dailyLog.break_quality_level),
+          daily_detachment_level: dailyLog.daily_detachment_level == null ? null : toIntegerOrNull(
             dailyLog.daily_detachment_level
           ),
-          daily_focus_level: toIntegerOrNull(dailyLog.daily_focus_level),
-          daily_accomplishment_level: toIntegerOrNull(
+          daily_focus_level: dailyLog.daily_focus_level == null ? null : toIntegerOrNull(dailyLog.daily_focus_level),
+          daily_accomplishment_level: dailyLog.daily_accomplishment_level == null ? null : toIntegerOrNull(
             dailyLog.daily_accomplishment_level
           ),
           exercise_names: Array.isArray(dailyLog.exercise_names)
@@ -669,19 +678,20 @@ function classifyBaseline(averageScore) {
   return { level: 'Very High', displayScore: 60 };
 }
 
-export function calculateBurnoutBaselineScore(answers) {
-  const answerMap = normalizeAnswers(answers);
+export function calculateBurnoutBaselineScore(answers, version = LEGACY_BASELINE_VERSION) {
+  const answerMap = version === LEGACY_BASELINE_VERSION ? normalizeAnswers(answers) : normalizeBurnoutAnswers(answers, version);
+  const keys = (category) => questionsForVersion(version).filter((question) => question.category === category).map((question) => question.question_key);
   const emotionalExhaustionScore = averageForKeys(
     answerMap,
-    EMOTIONAL_EXHAUSTION_KEYS
+    keys('emotional_exhaustion')
   );
   const depersonalizationScore = averageForKeys(
     answerMap,
-    DEPERSONALIZATION_KEYS
+    keys('depersonalization')
   );
   const personalAccomplishmentScore = averageForKeys(
     answerMap,
-    PERSONAL_ACCOMPLISHMENT_KEYS
+    keys('personal_accomplishment')
   );
 
   if (
@@ -720,6 +730,19 @@ export const burnoutQuestionKeys = {
 };
 
 export function calculateDailyBurnoutSnapshot(inputs) {
+  const coreOnly = inputs.dailyLog?.questionnaire_version === 'daily_core9_v3';
+  const restoredDaily = coreOnly || inputs.dailyLog?.questionnaire_version === 'daily_14_v2';
+  if (coreOnly) {
+    // Old answers retained by a same-day edit must not become hidden scoring inputs.
+    inputs = { ...inputs, dailyLog: { ...inputs.dailyLog,
+      perceived_stress_level: null, break_quality_level: null,
+      daily_detachment_level: null, daily_focus_level: null,
+      daily_accomplishment_level: null } };
+  }
+  if (restoredDaily) {
+    // Weekly questionnaire scores never enter the daily index or its evidence weights.
+    inputs = { ...inputs, weeklyPulse: null, baselineEvidence: { ...inputs.baselineEvidence, weeklyPulseCount: 0 } };
+  }
   const dailyLog = inputs.dailyLog;
   const weeklyPulse = inputs.weeklyPulse;
   const activityLog = inputs.activityLog;
@@ -729,8 +752,7 @@ export function calculateDailyBurnoutSnapshot(inputs) {
   const workloadRisk = workloadBandRisk(dailyLog?.workload_hours_band) ??
     riskFromLikertHighRisk(profile?.workload_level);
   const activityRiskValue = activityRisk(activityLog);
-  // Retired daily dimension fields remain as fallbacks for historical rows only.
-  // New check-ins supply these signals through the weekly pulse.
+  // Legacy rows retain weekly fallback behavior; restored daily logs use their own answers.
   const pressureValue = weeklyPulse?.perceived_pressure_level ??
     dailyLog?.perceived_stress_level;
   const recoveryRestValue = weeklyPulse?.recovery_rest_level ??
@@ -910,7 +932,9 @@ export function calculateDailyBurnoutSnapshot(inputs) {
     recoveryDeficitScore
   };
 
-  const contributingFactors = buildContributingFactors(scores, risks);
+  const contributingFactors = buildContributingFactors(scores, risks).map((factor) => restoredDaily ? {
+    ...factor, key: factor.key.replace('weekly_', 'daily_'), label: factor.label.replace('Weekly ', 'Daily ')
+  } : factor);
 
   return {
     user_id: inputs.userId,
@@ -929,6 +953,7 @@ export function calculateDailyBurnoutSnapshot(inputs) {
     missing_fields: completeness.missingFields,
     contributing_factors: contributingFactors,
     source_snapshot: compactSourceSnapshot(inputs, risks, baselinePolicy),
-    scoring_version: BURNOUT_SCORING_VERSION
+    scoring_version: coreOnly ? 'burnout_engine_v6_core9_v1'
+      : restoredDaily ? 'burnout_engine_v5_daily14_v1' : BURNOUT_SCORING_VERSION
   };
 }

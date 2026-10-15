@@ -190,7 +190,7 @@ function wellnessSection(wellness) {
   if (!current || current.count === 0) {
     return {
       level: 'unknown',
-      insight: 'No short daily logs were recorded in the last 30 days, so recent sleep, mood, and energy patterns cannot be compared.',
+      insight: 'No daily logs were recorded in the last 30 days, so recent sleep, mood, and energy patterns cannot be compared.',
       signals: [signal('coverage', 'No wellness logs were recorded in the last 30 days.', null)],
     };
   }
@@ -212,7 +212,7 @@ function wellnessSection(wellness) {
 
   return {
     level: highestLevel(signals.slice(0, 3)),
-    insight: `Across ${current.count} short daily logs, the 30-day averages are ${format(current.sleep, ' hours')} of sleep, ${format(current.mood, '/5')} mood, and ${format(current.energy, '/5')} energy.${comparisonText}`,
+    insight: `Across ${current.count} daily logs, the 30-day averages are ${format(current.sleep, ' hours')} of sleep, ${format(current.mood, '/5')} mood, and ${format(current.energy, '/5')} energy.${comparisonText}`,
     signals,
   };
 }
@@ -293,14 +293,14 @@ function recommendationsFor(sections, metrics) {
   if (classifyReportMetric('sleep', month?.sleep).level === 'warning' || classifyReportMetric('sleep', month?.sleep).level === 'high') {
     recommendations.push('Choose one realistic sleep routine to repeat consistently, such as a regular wind-down time or a steadier wake time.');
   }
-  if (classifyReportMetric('stress', pulseMonth?.pressure).level === 'warning' || classifyReportMetric('stress', pulseMonth?.pressure).level === 'high') {
-    recommendations.push('Plan short recovery pauses around the most demanding part of the week and compare pressure at the next weekly pulse.');
+  if (classifyReportMetric('stress', month?.pressure ?? pulseMonth?.pressure).level === 'warning' || classifyReportMetric('stress', month?.pressure ?? pulseMonth?.pressure).level === 'high') {
+    recommendations.push('Plan short recovery pauses around the most demanding part of the week and compare pressure in your daily logs.');
   }
   if (classifyReportMetric('activeMinutes', activityMonth?.activeMinutes).level === 'warning' || classifyReportMetric('activeMinutes', activityMonth?.activeMinutes).level === 'high') {
     recommendations.push('Add a manageable block of movement to a routine you already have, then increase it gradually if it feels sustainable.');
   }
-  if ((month?.count ?? 0) < 8 || (activityMonth?.count ?? 0) < 8 || (pulseMonth?.count ?? 0) < 2) {
-    recommendations.push('Keep short daily logs and weekly pulses consistent so future comparisons are based on a clearer pattern.');
+  if ((month?.count ?? 0) < 8 || (activityMonth?.count ?? 0) < 8 || (metrics.questionnaire?.month?.count ?? pulseMonth?.count ?? 0) < 2) {
+    recommendations.push('Keep daily logs and separate weekly reflections consistent so future comparisons are based on a clearer pattern.');
   }
 
   if (recommendations.length === 0) {

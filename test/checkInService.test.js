@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { submitCheckIn } from '../src/services/checkIn.service.js';
+import { getCheckInStatus, submitCheckIn } from '../src/services/checkIn.service.js';
 
 function dailyPayload(checkInType = 'daily') {
   return {
@@ -21,19 +21,39 @@ function dailyPayload(checkInType = 'daily') {
   };
 }
 
+test('restored daily log saves when the weekly questionnaire is overdue', async () => {
+  const client = new CheckInClient({
+    schedule: { pulse_weekday: 1, next_pulse_due_date: '2026-05-25', last_completed_due_date: null }
+  });
+  const payload = dailyPayload();
+  payload.schema_version = 2;
+  Object.assign(payload.daily, { perceived_stress_level: 3, break_quality_level: 4,
+    daily_detachment_level: 2, daily_focus_level: 4, daily_accomplishment_level: 5 });
+  const result = await submitCheckIn({ userId: 1, payload, database: databaseFor(client), scoreUpdater: async () => null });
+  assert.equal(result.check_in_type, 'daily');
+  assert.equal(client.updatedDaily, true);
+  assert.equal(client.savedWeekly, null);
+  assert.equal(result.schedule.is_overdue, true);
+  assert.equal(result.schedule.next_due_date, '2026-05-25');
+});
+
 class CheckInClient {
   constructor({
     schedule,
     todayPulse = null,
     hasTodayLog = true,
     lastLoggedDate = null,
-    baselineEpochStartedAt = null
+    baselineEpochStartedAt = null,
+    todayAssessment = null,
+    dailyVersion = null
   }) {
     this.schedule = { ...schedule };
     this.todayPulse = todayPulse;
     this.hasTodayLog = hasTodayLog;
     this.lastLoggedDate = lastLoggedDate;
     this.baselineEpochStartedAt = baselineEpochStartedAt;
+    this.todayAssessment = todayAssessment;
+    this.dailyVersion = dailyVersion;
     this.updatedDaily = false;
     this.savedWeekly = null;
     this.commands = [];
@@ -80,6 +100,9 @@ class CheckInClient {
         rows: this.todayPulse ? [this.todayPulse] : []
       };
     }
+    if (normalized.includes('FROM weekly_burnout_assessments')) {
+      return { rows: this.todayAssessment ? [this.todayAssessment] : [] };
+    }
     if (normalized.includes('WHERE user_id = $1 AND check_in_idempotency_key = $2')) {
       return { rowCount: 0, rows: [] };
     }
@@ -105,6 +128,8 @@ class CheckInClient {
     }
     if (normalized.startsWith('UPDATE daily_logs SET sleep_hours')) {
       this.updatedDaily = true;
+      this.dailyVersion = params[21];
+      this.reflectionValues = params.slice(16, 21);
       return { rowCount: 1, rows: [] };
     }
     if (normalized.startsWith('SELECT log_id, user_id, log_date, sleep_hours')) {
@@ -115,6 +140,7 @@ class CheckInClient {
           user_id: 1,
           log_date: '2026-05-26',
           sleep_hours: 7,
+          questionnaire_version: this.dailyVersion,
           sleep_quality: 3,
           mood_index: 2,
           energy_level: 4,
@@ -298,4 +324,35 @@ test('thirty-day return blocks a unified save with the stable conflict code', as
 
   assert.equal(client.updatedDaily, false);
   assert.equal(client.commands.includes('ROLLBACK'), true);
+});
+
+
+test('weekly-day practical inputs save independently with no duplicate reflection answers', async () => {
+  const client = new CheckInClient({ schedule: { pulse_weekday: 1, next_pulse_due_date: '2026-05-25' } });
+  const payload = dailyPayload();
+  payload.schema_version = 3;
+  payload.daily.questionnaire_version = 'daily_core9_v3';
+  const result = await submitCheckIn({ userId: 1, payload, database: databaseFor(client), scoreUpdater: async () => null });
+  assert.equal(result.log.questionnaire_version, 'daily_core9_v3');
+  assert.deepEqual(client.reflectionValues, [null, null, null, null, null]);
+  assert.equal(client.savedWeekly, null);
+  assert.equal(result.is_redo, true);
+  assert.equal(result.streak.longest_streak, 8);
+  assert.equal(
+    client.commands.some((command) => command.startsWith('UPDATE user_streaks SET current_streak')),
+    false
+  );
+});
+
+test('current status selects nine practical inputs when due, completed today, or editing a core log', async () => {
+  for (const scenario of [
+    { schedule: { pulse_weekday: 1, next_pulse_due_date: '2026-05-25' } },
+    { schedule: { pulse_weekday: 1, next_pulse_due_date: '2026-06-01' }, todayAssessment: { assessment_id: 4 } },
+    { schedule: { pulse_weekday: 1, next_pulse_due_date: '2026-06-01' }, dailyVersion: 'daily_core9_v3' }
+  ]) {
+    const result = await getCheckInStatus({ userId: 1, logDate: '2026-05-26', schemaVersion: 3, database: databaseFor(new CheckInClient(scenario)) });
+    assert.equal(result.daily_input_mode, 'weekly');
+  }
+  const result = await getCheckInStatus({ userId: 1, logDate: '2026-05-26', schemaVersion: 3, database: databaseFor(new CheckInClient({ schedule: { pulse_weekday: 1, next_pulse_due_date: '2026-06-01' } })) });
+  assert.equal(result.daily_input_mode, 'daily');
 });

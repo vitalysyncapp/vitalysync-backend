@@ -5,12 +5,13 @@ import { buildUserReportDocx } from './reportDocument.service.js';
 import { buildReportInsights } from './reportInsights.service.js';
 import { buildReportMetrics } from './reportMetrics.service.js';
 import { localizeReportInsights } from '../i18n/reportCopy.js';
+import { formatDateOnly } from './burnoutScoringEngine.js';
 
 async function loadReportRows(userId) {
-  const [logsResult, pulseResult, burnoutResult, exerciseResult] = await Promise.all([
+  const [logsResult, pulseResult, burnoutResult, exerciseResult, assessmentResult] = await Promise.all([
     pool.query(
       `SELECT
-         log_date, sleep_hours, sleep_quality, mood_index, energy_level
+         log_date, questionnaire_version, sleep_hours, sleep_quality, mood_index, energy_level, perceived_stress_level, break_quality_level, daily_detachment_level, daily_focus_level, daily_accomplishment_level
        FROM daily_logs
        WHERE user_id = $1
          AND log_date >= (CURRENT_DATE - INTERVAL '364 days')
@@ -48,11 +49,20 @@ async function loadReportRows(userId) {
        ORDER BY log_date DESC`,
       [userId],
     ),
+    pool.query(
+      `SELECT response_date, questionnaire_version, scores
+       FROM weekly_burnout_assessments
+       WHERE user_id = $1 AND response_date >= (CURRENT_DATE - INTERVAL '364 days')
+       ORDER BY response_date DESC`, [userId]
+    ),
   ]);
 
   return {
     logs: logsResult.rows,
     weeklyPulses: pulseResult.rows,
+    weeklyAssessments: assessmentResult.rows.map((row) => ({
+      ...row, response_date: formatDateOnly(row.response_date)
+    })),
     burnoutHistory: burnoutResult.rows,
     exercises: exerciseResult.rows,
   };

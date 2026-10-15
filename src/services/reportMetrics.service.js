@@ -1,3 +1,5 @@
+import { BURNOUT_QUESTIONNAIRE_VERSION, WEEKLY_QUESTIONNAIRE_VERSION } from './burnoutQuestionnaire.js';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const PERIODS = {
@@ -54,10 +56,16 @@ function averageAcrossLoggedDays(rows, field, digits = 0) {
 }
 
 function wellnessAverages(rows, expectedDays) {
+  const reflectionRows = rows.filter((row) => row.questionnaire_version !== 'daily_core9_v3');
   return {
     sleep: average(rows, 'sleep_hours'),
     mood: average(rows, 'mood_index', 1, (value) => value + 1),
     energy: average(rows, 'energy_level'),
+    pressure: average(reflectionRows, 'perceived_stress_level'),
+    recoveryRest: average(reflectionRows, 'break_quality_level'),
+    detachment: average(reflectionRows, 'daily_detachment_level'),
+    focus: average(reflectionRows, 'daily_focus_level'),
+    accomplishment: average(reflectionRows, 'daily_accomplishment_level'),
     count: rows.length,
     expectedDays,
   };
@@ -88,6 +96,7 @@ function activityAverages(rows, expectedDays) {
 export function buildReportMetrics({
   logs = [],
   weeklyPulses = [],
+  weeklyAssessments = [],
   exercises = [],
   burnoutHistory = [],
   now = new Date(),
@@ -100,9 +109,24 @@ export function buildReportMetrics({
 
   const wellness = {};
   const pulse = {};
+  const questionnaire = {};
+  const legacyQuestionnaire = {};
   const activity = {};
 
   for (const [key, period] of Object.entries(PERIODS)) {
+    const assessmentRows = filterPeriod(weeklyAssessments, 'response_date', period, todayUtc);
+    for (const [version, target] of [[WEEKLY_QUESTIONNAIRE_VERSION, questionnaire],
+      [BURNOUT_QUESTIONNAIRE_VERSION, legacyQuestionnaire]]) {
+      const versionRows = assessmentRows.filter((row) => row.questionnaire_version === version);
+      target[key] = {
+        questionnaire_version: version,
+        count: versionRows.length,
+        expectedPulses: period.expectedPulses,
+        ...Object.fromEntries(['emotional_exhaustion', 'depersonalization', 'personal_accomplishment'].map((dimension) => [
+          dimension, average(versionRows.map((row) => ({ value: row.scores?.[dimension]?.mean })), 'value', 2)
+        ]))
+      };
+    }
     wellness[key] = wellnessAverages(
       filterPeriod(logs, 'log_date', period, todayUtc),
       period.expectedDays,
@@ -120,6 +144,9 @@ export function buildReportMetrics({
   return {
     wellness,
     pulse,
+    questionnaire,
+    legacyQuestionnaire,
+    latestWeeklyAssessment: weeklyAssessments[0] ?? null,
     activity,
     latestBurnout: burnoutHistory[0] ?? null,
   };

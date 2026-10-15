@@ -12,6 +12,7 @@ import {
 } from '../src/services/onboarding.service.js';
 import { startBaselineEpoch } from '../src/services/baselineEpochService.js';
 import pool from '../src/config/db.js';
+import { BURNOUT_QUESTIONS, BURNOUT_QUESTIONNAIRE_VERSION, LEGACY_BASELINE_VERSION, WEEKLY_QUESTIONNAIRE_VERSION } from '../src/services/burnoutQuestionnaire.js';
 
 const burnoutQuestionKeys = [
   'ee_01',
@@ -31,8 +32,10 @@ const burnoutQuestionKeys = [
   'pa_05',
 ];
 
-function baselineAnswers(value = 3) {
-  return burnoutQuestionKeys.map((questionKey) => ({
+function baselineAnswers(value = 3, version = LEGACY_BASELINE_VERSION) {
+  const keys = version === BURNOUT_QUESTIONNAIRE_VERSION
+    ? BURNOUT_QUESTIONS.map((question) => question.question_key) : burnoutQuestionKeys;
+  return keys.map((questionKey) => ({
     question_key: questionKey,
     numeric_value: value,
   }));
@@ -205,7 +208,8 @@ test('onboarding summary exposes email verification state', async () => {
   }
 });
 
-test('onboarding persists server-calculated body metrics', async () => {
+for (const version of [LEGACY_BASELINE_VERSION, BURNOUT_QUESTIONNAIRE_VERSION])
+test(`onboarding persists server-calculated body metrics and ${version}`, async () => {
   const originalConnect = pool.connect;
   const queries = [];
   const fakeClient = {
@@ -236,6 +240,7 @@ test('onboarding persists server-calculated body metrics', async () => {
               height_cm: 180,
               weight_kg: 80,
               bmi: 24.7,
+              burnout_questionnaire_version: values[19],
             },
           ],
         };
@@ -291,7 +296,8 @@ test('onboarding persists server-calculated body metrics', async () => {
         workload_level: 3,
         has_extra_responsibilities: false,
       },
-      burnout_answers: baselineAnswers(),
+      burnout_answers: baselineAnswers(3, version),
+      questionnaire_version: version,
     });
 
     const profileInsert = queries.find((query) =>
@@ -306,7 +312,9 @@ test('onboarding persists server-calculated body metrics', async () => {
         query.values[1] === 'nutrition_calories'
     );
 
-    assert.deepEqual(profileInsert.values.slice(-3), [180, 80, 24.7]);
+    assert.deepEqual(profileInsert.values.slice(16, 19), [180, 80, 24.7]);
+    assert.equal(profileInsert.values[19], version);
+    assert.equal(response.profile.burnout_questionnaire_version, version);
     assert.deepEqual(legacyInsert.values.slice(-3), [180, 80, 24.7]);
     assert.deepEqual(nutritionGoalInsert.values.slice(0, 5), [
       1,
@@ -593,7 +601,15 @@ test('burnout baseline retake rejects users without onboarding profiles', async 
   assert.ok(queries.includes('ROLLBACK'));
 });
 
-test('thirty-day baseline refresh starts a new epoch before the next score', async () => {
+test('weekly eleven-item form cannot replace the baseline', async () => {
+  await assert.rejects(updateUserBurnoutBaseline(1, {
+    questionnaire_version: WEEKLY_QUESTIONNAIRE_VERSION,
+    burnout_answers: []
+  }), /baseline requires the 22-item questionnaire/);
+});
+
+for (const version of [LEGACY_BASELINE_VERSION, BURNOUT_QUESTIONNAIRE_VERSION])
+test(`thirty-day baseline refresh persists ${version} and starts a new epoch`, async () => {
   const originalConnect = pool.connect;
   const queries = [];
   const fakeClient = {
@@ -614,7 +630,8 @@ test('thirty-day baseline refresh starts a new epoch before the next score', asy
             id: 1,
             user_id: 1,
             initial_burnout_score: 35,
-            initial_burnout_level: 'Moderate'
+            initial_burnout_level: 'Moderate',
+            burnout_questionnaire_version: values[6]
           }]
         };
       }
@@ -676,10 +693,13 @@ test('thirty-day baseline refresh starts a new epoch before the next score', asy
 
   try {
     const response = await updateUserBurnoutBaseline(1, {
-      burnout_answers: baselineAnswers()
+      burnout_answers: baselineAnswers(3, version),
+      questionnaire_version: version
     });
 
     assert.equal(response.baseline_epoch_id, 2);
+    assert.equal(response.profile.burnout_questionnaire_version, version);
+    assert.equal(queries.find(({ text }) => text.startsWith('UPDATE user_onboarding_profiles')).values[6], version);
     assert.equal(response.baseline_refresh_reason, 'thirty_day_return');
     assert.equal(response.latest_score, null);
     assert.ok(queries.some(({ text }) =>

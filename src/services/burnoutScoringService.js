@@ -112,6 +112,7 @@ export async function loadBurnoutScoreInputs(client, userId, scoreDate) {
          log_id,
          user_id,
          log_date,
+         questionnaire_version,
          sleep_hours,
          sleep_quality,
          mood_index,
@@ -216,7 +217,9 @@ export async function loadBurnoutScoreInputs(client, userId, scoreDate) {
        FROM burnout_score_history
        WHERE user_id = $1
          AND score_date BETWEEN ($2::DATE - INTERVAL '6 days') AND $2
-         AND scoring_version = $4
+         AND scoring_version = ANY(CASE
+           WHEN (SELECT questionnaire_version FROM daily_logs WHERE user_id = $1 AND log_date = $2) IN ('daily_14_v2', 'daily_core9_v3')
+           THEN ARRAY['burnout_engine_v5_daily14_v1', 'burnout_engine_v6_core9_v1'] ELSE ARRAY[$4] END)
          AND (
            $3::BIGINT IS NULL
            OR baseline_epoch_id = $3

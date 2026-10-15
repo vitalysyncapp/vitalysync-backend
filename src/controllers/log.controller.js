@@ -367,6 +367,7 @@ export async function getLogHistory(req, res) {
          log_id,
          user_id,
          log_date,
+         questionnaire_version,
          sleep_hours,
          sleep_quality,
          mood_index,

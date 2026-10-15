@@ -25,7 +25,8 @@ export async function getUnifiedCheckInStatus(req, res) {
     const userId = getAuthenticatedUserId(req) ?? req.query?.user_id;
     const result = await getCheckInStatus({
       userId,
-      logDate: req.query?.date ?? req.query?.log_date
+      logDate: req.query?.date ?? req.query?.log_date,
+      schemaVersion: Number(req.query?.schema_version ?? 1)
     });
     const eventDate = String(
       req.query?.date ?? req.query?.log_date ?? new Date().toISOString().slice(0, 10)

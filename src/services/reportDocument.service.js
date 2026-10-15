@@ -234,6 +234,19 @@ function wellnessTable(metrics, locale) {
   );
 }
 
+function weeklyQuestionnaireTable(metrics, locale, source = 'questionnaire') {
+  const widths = [2800, 2200, 2200, TABLE_WIDTH - 7200];
+  const rows = PERIOD_ROWS.map(([key, label]) => {
+    const period = metrics[source]?.[key];
+    return new TableRow({ cantSplit: true, children: [
+      plainCell(`${reportText(label, locale)} (${period?.count ?? 0})`, widths[0]),
+      ...['emotional_exhaustion', 'depersonalization', 'personal_accomplishment'].map((dimension, index) =>
+        plainCell(format(period?.[dimension], '/5'), widths[index + 1], AlignmentType.CENTER))
+    ] });
+  });
+  return reportTable(['Period (logs)', 'Exhaustion', 'Detachment', 'Accomplishment'].map((label) => reportText(label, locale)), widths, rows);
+}
+
 function weeklyPulseTable(metrics, locale) {
   const widths = [1800, 1450, 1450, 1450, 1450, 1450, TABLE_WIDTH - 9050];
   const rows = PERIOD_ROWS.map(([key, label]) => {
@@ -403,7 +416,7 @@ export async function buildUserReportDocx({
         ])]
       : []),
 
-    heading(reportText('Burnout status and dimensions', locale)),
+    heading(reportText('Daily wellness estimate and contributing dimensions', locale)),
     burnoutTable(metrics, locale),
     insightParagraph(insights.sections.burnout.insight, insights.sections.burnout.level, locale),
     ...signalsBlock(insights.sections.burnout, locale),
@@ -413,7 +426,17 @@ export async function buildUserReportDocx({
     insightParagraph(insights.sections.wellness.insight, insights.sections.wellness.level, locale),
     ...signalsBlock(insights.sections.wellness, locale),
 
-    heading(reportText('Weekly pulse context', locale)),
+    heading(reportText('Weekly questionnaire dimensions', locale)),
+    weeklyQuestionnaireTable(metrics, locale),
+    bodyParagraph(reportText('Custom 11-item weekly reflection: 5 exhaustion, 3 detachment, and 3 accomplishment items, using 1-5 responses. Higher accomplishment is positive. Baselines use 22 items. These are separate dimension scores, not official MBI scores or clinical classifications.', locale)),
+    ...(metrics.latestWeeklyAssessment ? [bodyParagraph(`Latest weekly log: ${String(metrics.latestWeeklyAssessment.response_date).slice(0, 10)}`)] : []),
+    ...(metrics.legacyQuestionnaire?.year?.count > 0 ? [
+      heading(reportText('Previous 22-item weekly reflections', locale)),
+      weeklyQuestionnaireTable(metrics, locale, 'legacyQuestionnaire'),
+      bodyParagraph(reportText('Previous and current questionnaire versions are summarized separately because they contain different items.', locale))
+    ] : []),
+
+    heading(reportText('Legacy weekly pulse context', locale)),
     weeklyPulseTable(metrics, locale),
     insightParagraph(insights.sections.pulse.insight, insights.sections.pulse.level, locale),
     ...signalsBlock(insights.sections.pulse, locale),

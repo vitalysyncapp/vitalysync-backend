@@ -122,7 +122,7 @@ test('report insights describe table values and keep recommendations last in the
   assert.match(documentXml, /The latest burnout result is 82\/100 with a critical status/);
   assert.match(documentXml, /AI-generated highlight/);
   assert.match(documentXml, /Mood averaged 3\/5/);
-  assert.match(documentXml, /Weekly pulse context/);
+  assert.match(documentXml, /Legacy weekly pulse context/);
   assert.match(documentXml, /Pressure/);
   assert.match(documentXml, /Avg calories\/logged day/);
 
