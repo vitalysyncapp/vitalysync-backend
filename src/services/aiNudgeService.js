@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 
 import OpenAI from 'openai';
+import { enhanceCompanionWording } from './companionWordingService.js';
 
 import {
   NUDGE_COPY_LIMITS,
@@ -284,7 +285,7 @@ async function recordAiGeneration(
         recommendation.nudge_event_id,
         recommendation.nudge_type,
         model,
-        PROMPT_VERSION,
+        recommendation.metadata?.ai_prompt_version ?? PROMPT_VERSION,
         hashContext(context),
         JSON.stringify(context),
         JSON.stringify(output ?? {}),
@@ -301,8 +302,24 @@ export async function enhanceNudgeRecommendation(
   client,
   userId,
   recommendation,
-  { summary, preferences, personalization = null, locale = 'en' }
+  { summary, preferences, personalization = null, locale = 'en', recentMessages = [] }
 ) {
+  if (recommendation.metadata?.content_version) {
+    const result = await enhanceCompanionWording(recommendation, {
+      locale, style: preferences.preferredNudgeStyle, recentMessages
+    });
+    if (!recommendation.metadata.reused_content) {
+      await recordAiGeneration(client, {
+        userId, recommendation: result,
+        model: process.env.OPENAI_NUDGE_MODEL || DEFAULT_OPENAI_NUDGE_MODEL,
+        context: { evidence: recommendation.metadata.evidence, action_id: recommendation.metadata.action_id,
+          content_id: recommendation.metadata.content_id, version: 'companion_bridge_v1', locale },
+        output: { title: result.title, message: result.message },
+        validationStatus: result.metadata.ai_enhanced ? 'valid' : 'fallback'
+      });
+    }
+    return result;
+  }
   const model = process.env.OPENAI_NUDGE_MODEL || DEFAULT_OPENAI_NUDGE_MODEL;
   const context = buildAiContext(
     recommendation,
@@ -323,7 +340,7 @@ export async function enhanceNudgeRecommendation(
             {
               type: 'input_text',
               text:
-                'You write short, human wellness nudges for VitalySync. Preserve deterministic priority, trigger, focus, and user-facing severity. Never show the words critical or urgent; use needs support for the strongest state. Do not diagnose burnout and do not invent data. Start the message with the username followed by a comma when one is available, and use that username exactly once across the full output. Use at most one subtle profile detail only when useful. Do not mention email, age, or gender. Give one concrete action and at most one short reason. Return no more than one action step, and make it restate the same action instead of adding another. Keep the message at 140 characters or fewer. Sound warm, direct, natural, and non-clinical. Avoid hype, promises, generic lectures, and unsupported claims. Follow guardrails.output_language exactly; for Filipino use natural conversational Taglish and keep common wellness and app terms in English. Return JSON only.'
+                'You write short, human wellness nudges for VitalySync. Preserve deterministic priority, trigger, focus, and user-facing severity. Never show the words critical or urgent; use needs support for the strongest state. Do not diagnose burnout and do not invent data. Names are optional. Prefer a natural opening without a name. Never use a name more than once. Use at most one subtle profile detail only when useful. Do not mention email, age, or gender. Give one concrete action and at most one short reason. Return no more than one action step, and make it restate the same action instead of adding another. Keep the message at 140 characters or fewer. Sound warm, direct, natural, and non-clinical. Avoid hype, promises, generic lectures, and unsupported claims. Follow guardrails.output_language exactly; for Filipino use natural conversational Taglish and keep common wellness and app terms in English. Return JSON only.'
             }
           ]
         },
@@ -353,7 +370,7 @@ export async function enhanceNudgeRecommendation(
     const normalized = normalizeAiOutput(
       {
         ...parsed,
-        message: ensureNameInMessage(parsed?.message, displayName)
+        message: parsed?.message
       },
       preferences.preferredNudgeStyle,
       displayName
@@ -430,7 +447,7 @@ export async function enhanceNudgeRecommendations(
   client,
   userId,
   recommendations,
-  { summary, preferences, personalization = null, locale = 'en', enhanceThrottled = false }
+  { summary, preferences, personalization = null, locale = 'en', enhanceThrottled = false, recentMessages = [] }
 ) {
   const enhanced = [];
 
@@ -445,7 +462,8 @@ export async function enhanceNudgeRecommendations(
         summary,
         preferences,
         personalization,
-        locale
+        locale,
+        recentMessages
       })
     );
   }

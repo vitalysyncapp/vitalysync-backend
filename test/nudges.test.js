@@ -129,7 +129,7 @@ test('recent nudge feedback loads metadata needed for focus matching', async () 
     1
   );
 
-  assert.match(querySql, /status, metadata, created_at/);
+  assert.match(querySql, /status, metadata, acted_at, created_at/);
 });
 
 test('smart nudge feedback suppresses recently dismissed non-urgent types when alternatives exist', () => {
@@ -310,7 +310,7 @@ test('smart nudge personalization adds username metadata without changing rankin
   assert.equal(personalized.nudge_type, original.nudge_type);
   assert.equal(personalized.priority, original.priority);
   assert.equal(personalized.recommended_focus, original.recommended_focus);
-  assert.match(personalized.message, /^Vitaly, /);
+  assert.equal(personalized.message, original.message);
   assert.equal(personalized.metadata.user_display_name, 'Vitaly');
   assert.deepEqual(personalized.metadata.personalization_profile.wellness_goals, [
     'Improve sleep',
@@ -324,7 +324,7 @@ test('smart nudge personalization adds username metadata without changing rankin
   ]);
   assert.equal(personalized.metadata.copy_validation_status, 'valid');
   assert.ok(personalized.message.length <= NUDGE_COPY_LIMITS.message);
-  assert.equal((personalized.message.match(/Vitaly/gi) ?? []).length, 1);
+  assert.equal((personalized.message.match(/Vitaly/gi) ?? []).length, 0);
 });
 
 test('deterministic nudges match user-facing severity and contextual inputs', () => {

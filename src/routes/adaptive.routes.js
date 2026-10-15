@@ -6,6 +6,7 @@ import {
   createNotificationEvent,
   createNudgeEvent,
   getNudgeRecommendations,
+  getPersonalInsightForUser,
   getReminderPreferences,
   listInsightReports,
   listNotificationEvents,
@@ -30,6 +31,7 @@ router.get(
 );
 
 router.get('/insight-reports', listInsightReports);
+router.get('/personal-insight', rateLimiters.aiNudge, getPersonalInsightForUser);
 router.post(
   '/insight-reports/refresh',
   rateLimiters.reportRefresh,

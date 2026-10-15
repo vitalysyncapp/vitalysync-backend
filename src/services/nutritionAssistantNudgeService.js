@@ -3,6 +3,10 @@ import { localizeNutritionNudge } from '../i18n/generatedCopy.js';
 
 import { calculateTotals, toNumber } from './nutrition.service.js';
 import { analyzeNutritionMealPatterns } from './nutritionPatternService.js';
+import { identifyContent, selectContent } from './wellnessContentService.js';
+import { nutritionVariants } from './wellnessCopy.js';
+import { enhanceCompanionWording } from './companionWordingService.js';
+import { loadNudgeThrottlePreferences } from './adaptiveNudgeService.js';
 
 const DEFAULT_OPENAI_NUTRITION_NUDGE_MODEL = 'gpt-4o-mini';
 const PROMPT_VERSION = 'nutrition_assistant_nudge_v3_curated';
@@ -642,6 +646,13 @@ function resolveCuratedNutritionSelection(deterministic, selection) {
 }
 
 export async function enhanceNutritionAssistantNudge(insight) {
+  if (insight.metadata?.content_version) {
+    return enhanceCompanionWording(insight, {
+      model: process.env.OPENAI_NUTRITION_NUDGE_MODEL || DEFAULT_OPENAI_NUTRITION_NUDGE_MODEL,
+      maxLength: 180, locale: insight.metadata.locale,
+      style: insight.metadata.preferred_nudge_style ?? 'Gentle'
+    });
+  }
   const model =
     process.env.OPENAI_NUTRITION_NUDGE_MODEL ||
     process.env.OPENAI_NUTRITION_MODEL ||
@@ -697,6 +708,7 @@ export async function buildNutritionAssistantNudgeResponse({
   now = new Date(),
   useAi = true,
   locale = 'en',
+  preferences = { preferredNudgeStyle: 'Gentle', cooldownHours: 8 },
   aiEnhancer = enhanceNutritionAssistantNudge
 }) {
   const deterministic = buildDeterministicNutritionAssistantNudge({
@@ -706,13 +718,26 @@ export async function buildNutritionAssistantNudgeResponse({
     now
   });
 
-  if (!deterministic || !useAi) {
-    return localizeNutritionNudge(deterministic, locale);
-  }
+  if (!deterministic) return null;
+  const localized = localizeNutritionNudge(deterministic, locale);
+  const context = { locale, summary: normalizeSummary(summary),
+    recent: recentSummaries.map((item) => ({ date: item.date, totals: item.day_totals })),
+    style: preferences.preferredNudgeStyle };
+  const variants = nutritionVariants(localized, locale).map((variant) => identifyContent({
+    ...variant, metadata: { ...variant.metadata,
+      evidence: localized.message.split(/(?<=\.)\s/)[0],
+      preferred_nudge_style: preferences.preferredNudgeStyle,
+      nudge_cooldown_hours: preferences.cooldownHours }
+  }, { surface: 'nutrition', context, locale, now }));
+  const selected = selectContent(variants, recentEvents, { now, cooldownHours: preferences.cooldownHours });
+  if (!selected) return null;
+  selected.id = selected.metadata.content_id;
+  if (!useAi || selected.metadata.reused_content) return selected;
 
   try {
-    const selection = await aiEnhancer(deterministic);
-    const safe = resolveCuratedNutritionSelection(deterministic, selection);
+    const selection = await aiEnhancer(selected);
+    if (selection?.metadata?.content_id === selected.metadata.content_id) return selection;
+    const safe = resolveCuratedNutritionSelection(selected, selection);
     if (safe) {
       return localizeNutritionNudge(safe, locale);
     }
@@ -720,9 +745,9 @@ export async function buildNutritionAssistantNudgeResponse({
     throw new Error('AI nutrition nudge failed deterministic validation');
   } catch (error) {
     return localizeNutritionNudge({
-      ...deterministic,
+      ...selected,
       metadata: {
-        ...deterministic.metadata,
+        ...selected.metadata,
         ai_enhanced: false,
         ai_fallback: true,
         ai_error: 'curated_selection_unavailable'
@@ -822,11 +847,11 @@ async function loadNutritionWindow(client, userId, date) {
 
 async function loadRecentNutritionFeedback(client, userId) {
   const result = await client.query(
-    `SELECT status, metadata, acted_at, created_at
+    `SELECT nudge_event_id, message, action_label, status, metadata, acted_at, created_at
      FROM nudge_events
      WHERE user_id = $1
        AND nudge_type = 'nutrition_insight'
-       AND created_at >= NOW() - INTERVAL '14 days'
+       AND created_at >= NOW() - INTERVAL '7 days'
      ORDER BY created_at DESC`,
     [userId]
   );
@@ -842,12 +867,14 @@ export async function getNutritionAssistantNudge(
   const recentSummaries = await loadNutritionWindow(client, userId, date);
   const summary = recentSummaries[recentSummaries.length - 1];
   const recentEvents = await loadRecentNutritionFeedback(client, userId);
+  const preferences = await loadNudgeThrottlePreferences(client, userId);
 
   return buildNutritionAssistantNudgeResponse({
     summary,
     recentSummaries,
     recentEvents,
-    now: new Date(`${date}T12:00:00.000Z`),
+    now: new Date(),
+    preferences,
     useAi,
     locale
   });

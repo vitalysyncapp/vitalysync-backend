@@ -541,7 +541,7 @@ test('nutrition assistant loads one bounded seven-day database window', async ()
     useAi: false,
   });
 
-  assert.equal(queries.length, 2);
+  assert.equal(queries.length, 3);
   assert.match(queries[0].text, /INTERVAL '6 days'/);
   assert.deepEqual(queries[0].values, [7, '2026-05-22']);
   assert.match(queries[1].text, /nudge_events/);

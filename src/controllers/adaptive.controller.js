@@ -1,4 +1,6 @@
 import pool from '../config/db.js';
+import { getPersonalInsight } from '../services/personalInsightService.js';
+import { CONTENT_INTERACTIONS, interactionPatch, saveContentEvent } from '../services/wellnessContentService.js';
 import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import {
   getAdaptiveNudgeRecommendations
@@ -496,11 +498,25 @@ export async function refreshInsightReports(req, res) {
   }
 }
 
+export async function getPersonalInsightForUser(req, res) {
+  const userId = getRequestUserId(req, req.query.user_id);
+  const useAi = req.query.ai == null ? true : parseOptionalBoolean(req.query.ai);
+  if (!userId || useAi === undefined) return res.status(400).json({ message: 'Valid user and ai flag are required' });
+  try {
+    if (!await ensureUserExists(pool, userId)) return res.status(404).json({ message: 'User not found' });
+    const insight = await getPersonalInsight(pool, userId, { locale: req.locale, useAi });
+    return res.status(200).json({ insight });
+  } catch (error) {
+    console.error('Personal insight error:', error.message);
+    return res.status(500).json({ message: 'Failed to fetch personal insight' });
+  }
+}
+
 export async function getNudgeRecommendations(req, res) {
   const userId = getRequestUserId(req, req.query.user_id);
   const limit = parseLimitedInt(req.query.limit, 3, 5);
   const recordShown = req.query.record == null
-    ? true
+    ? false
     : parseOptionalBoolean(req.query.record);
   const useAi = req.query.ai == null
     ? false
@@ -577,6 +593,7 @@ export async function listNudgeEvents(req, res) {
          updated_at
        FROM nudge_events
        WHERE user_id = $1
+         AND COALESCE(metadata->>'surface', 'wellness') = 'wellness'
        ORDER BY created_at DESC
        LIMIT $2`,
       [userId, limit]
@@ -600,6 +617,12 @@ export async function createNudgeEvent(req, res) {
   const actionLabel = normalizeNullableText(body.action_label);
   const status = normalizeNullableText(body.status) ?? 'shown';
   const metadata = normalizeMetadata(body.metadata);
+  const interaction = body.interaction;
+  if (interaction != null && (!CONTENT_INTERACTIONS.has(interaction) ||
+      !/^[a-f0-9]{32}$/.test(metadata?.content_id ?? '') ||
+      !['wellness', 'nutrition', 'dashboard'].includes(metadata?.surface))) {
+    return res.status(400).json({ message: 'Valid content identity and interaction are required' });
+  }
 
   if (!userId) {
     return res.status(400).json({ message: 'Valid user_id is required' });
@@ -627,6 +650,12 @@ export async function createNudgeEvent(req, res) {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    if (interaction) {
+      const event = await saveContentEvent(pool, userId, {
+        nudge_type: nudgeType, message, trigger_reason: triggerReason, action_label: actionLabel, metadata
+      }, interaction);
+      return res.status(201).json({ message: 'Nudge event saved', event: formatNudgeEvent(event) });
+    }
     const result = await pool.query(
       `INSERT INTO nudge_events (
          user_id,
@@ -679,6 +708,7 @@ export async function updateNudgeEventStatus(req, res) {
   const eventId = parsePositiveInt(req.params.eventId);
   const userId = getRequestUserId(req, req.body?.user_id);
   const status = normalizeRequiredText(req.body?.status);
+  const interaction = req.body?.interaction;
 
   if (!eventId) {
     return res.status(400).json({ message: 'Valid nudge event id is required' });
@@ -688,11 +718,31 @@ export async function updateNudgeEventStatus(req, res) {
     return res.status(400).json({ message: 'Valid user_id is required' });
   }
 
-  if (!status || !ALLOWED_NUDGE_STATUSES.has(status)) {
+  if (interaction != null ? !CONTENT_INTERACTIONS.has(interaction) : (!status || !ALLOWED_NUDGE_STATUSES.has(status))) {
     return res.status(400).json({ message: 'Valid nudge status is required' });
   }
 
   try {
+    if (interaction) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const selected = await client.query('SELECT * FROM nudge_events WHERE nudge_event_id = $1 AND user_id = $2 FOR UPDATE', [eventId, userId]);
+        if (!selected.rows[0]) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ message: 'Nudge event not found' });
+        }
+        const patch = interactionPatch(selected.rows[0], interaction);
+        const updated = await client.query(
+          `UPDATE nudge_events SET status = $3, metadata = $4,
+           acted_at = CASE WHEN $5 = 'shown' THEN acted_at ELSE NOW() END, updated_at = NOW()
+           WHERE nudge_event_id = $1 AND user_id = $2 RETURNING *`,
+          [eventId, userId, patch.status, JSON.stringify(patch.metadata), interaction]);
+        await client.query('COMMIT');
+        return res.status(200).json({ message: 'Nudge event updated', event: formatNudgeEvent(updated.rows[0]) });
+      } catch (error) { await client.query('ROLLBACK'); throw error; }
+      finally { client.release(); }
+    }
     const result = await pool.query(
       `UPDATE nudge_events
        SET status = $3::varchar,

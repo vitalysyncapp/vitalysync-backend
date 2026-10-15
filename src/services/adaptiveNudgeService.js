@@ -1,4 +1,6 @@
 import { enhanceNudgeRecommendations } from './aiNudgeService.js';
+import { buildWellnessContext, identifyContent, personalEvidence, selectContent } from './wellnessContentService.js';
+import { wellnessVariants } from './wellnessCopy.js';
 import {
   localizeAdaptiveSummary,
   localizeNudgeRecommendation,
@@ -597,22 +599,19 @@ export async function loadNudgePersonalizationProfile(client, userId) {
 
 export function personalizeNudgeRecommendation(recommendation, personalization) {
   const userDisplayName = personalization?.displayName ?? null;
-  const personalizedMessage = prependDisplayName(
-    recommendation.message,
-    userDisplayName
-  );
+  const personalizedMessage = recommendation.message;
   const validation = validateNudgeCopy({
     title: recommendation.title,
     message: personalizedMessage,
     actionLabel: recommendation.action_label,
-    displayName: userDisplayName
+    displayName: null
   });
   const fallbackCopy = fallbackCopyForSeverity(recommendation.severity);
   const shouldFallback = !validation.valid;
   const selectedCopy = shouldFallback
     ? {
       ...fallbackCopy,
-      message: prependDisplayName(fallbackCopy.message, userDisplayName)
+      message: fallbackCopy.message
     }
     : {
       title: validation.copy.title,
@@ -624,7 +623,7 @@ export function personalizeNudgeRecommendation(recommendation, personalization) 
       title: selectedCopy.title,
       message: selectedCopy.message,
       actionLabel: selectedCopy.actionLabel,
-      displayName: userDisplayName
+      displayName: null
     })
     : validation;
 
@@ -647,7 +646,7 @@ export function personalizeNudgeRecommendation(recommendation, personalization) 
   };
 }
 
-async function loadNudgeThrottlePreferences(client, userId) {
+export async function loadNudgeThrottlePreferences(client, userId) {
   const result = await client.query(
     `SELECT
        urp.nudge_cooldown_hours,
@@ -679,7 +678,7 @@ async function loadNudgeThrottlePreferences(client, userId) {
 
 export async function loadRecentNudgeEvents(client, userId) {
   const result = await client.query(
-    `SELECT nudge_event_id, nudge_type, status, metadata, created_at
+    `SELECT nudge_event_id, nudge_type, message, action_label, status, metadata, acted_at, created_at
      FROM nudge_events
      WHERE user_id = $1
        AND created_at >= NOW() - INTERVAL '7 days'
@@ -735,6 +734,8 @@ function feedbackMatch(event, recommendation) {
 }
 
 export function applyRecentFeedback(recommendations, recentEvents, preferences) {
+  recentEvents = recentEvents.filter((event) => !eventMetadata(event).surface || eventMetadata(event).surface === 'wellness')
+    .map((event) => ({ ...event, status: eventMetadata(event).helpfulness === 'dislike' ? 'dismissed' : event.status }));
   const now = new Date();
   const shownTodayCount = recentEvents.filter((event) =>
     ['shown', 'accepted', 'completed', 'snoozed'].includes(event.status) &&
@@ -778,7 +779,7 @@ export function applyRecentFeedback(recommendations, recentEvents, preferences) 
         (dismissedType ? 2 : 0) -
         (dismissedFocus ? 1 : 0);
       const inCooldown =
-        sameTypeEvent &&
+        Boolean(sameTypeEvent) &&
         hoursSince(sameTypeEvent.created_at, now) < preferences.cooldownHours;
       const throttled =
         !isStrongRecommendation(recommendation) &&
@@ -919,7 +920,7 @@ async function attachShownEvent(client, userId, recommendation, preferences) {
 export async function getAdaptiveNudgeRecommendations(
   client,
   userId,
-  { limit = 3, recordShown = true, endDate, useAi = false, locale = 'en' } = {}
+  { limit = 3, recordShown = false, endDate, useAi = false, locale = 'en' } = {}
 ) {
   const normalizedLimit = boundedLimit(limit);
   const summary = await getBurnoutPatternSummary(client, userId, { endDate });
@@ -937,19 +938,34 @@ export async function getAdaptiveNudgeRecommendations(
     candidates,
     recentEvents,
     preferences
-  ).slice(
-    0,
-    normalizedLimit
   );
-  const personalizedRanked = ranked.map((recommendation) =>
-    personalizeNudgeRecommendation(recommendation, personalization)
-  );
+  const context = buildWellnessContext(summary, personalization, preferences, locale);
+  const selected = [];
+  const strongest = ranked.find((item) => ['high', 'urgent'].includes(item.priority));
+  for (const recommendation of ranked) {
+    // Exhausting support actions must not turn a strong signal into unrelated
+    // maintenance advice. The separate observation still describes the signal.
+    if (strongest && !selected.length && recommendation.priority !== strongest.priority) break;
+    const variants = wellnessVariants(recommendation, locale).map((variant) =>
+      identifyContent({ ...variant, metadata: { ...variant.metadata,
+        evidence: personalEvidence(summary, personalization.profile, recommendation.recommended_focus, locale) ||
+          localizeNudgeRecommendation(recommendation, locale).trigger_reason
+      } }, { surface: 'wellness', context, locale }));
+    const chosen = selectContent(variants, recentEvents, {
+      cooldownHours: preferences.cooldownHours
+    });
+    if (chosen && !selected.some((item) => item.metadata.action_id === chosen.metadata.action_id)) selected.push(chosen);
+    if (selected.length >= normalizedLimit) break;
+  }
+  const personalizedRanked = selected.map((recommendation) =>
+    personalizeNudgeRecommendation(recommendation, personalization));
   const recommendations = useAi
     ? await enhanceNudgeRecommendations(client, userId, personalizedRanked, {
       summary,
       preferences,
       personalization,
       locale,
+      recentMessages: recentEvents.map((event) => event.message).filter(Boolean).slice(0, 8),
       enhanceThrottled: !recordShown
     })
     : personalizedRanked;

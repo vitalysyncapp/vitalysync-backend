@@ -97,13 +97,8 @@ export function validateNudgeCopy({
     const nameMatches = allCopy.match(
       new RegExp(escapeRegExp(normalizedName), 'gi')
     ) ?? [];
-    if (nameMatches.length !== 1) {
+    if (nameMatches.length > 1) {
       errors.push('username_count');
-    }
-    if (!normalizedMessage.toLowerCase().startsWith(
-      `${normalizedName.toLowerCase()},`
-    )) {
-      errors.push('username_placement');
     }
   }
 

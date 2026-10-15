@@ -49,7 +49,7 @@ function parseBoolean(value, fallback) {
 function shouldSkipAiNudge(req) {
   const baseUrl = String(req.baseUrl ?? '');
   const isAdaptiveNudge = baseUrl.endsWith('/adaptive');
-  const aiEnabled = parseBoolean(req.query?.ai, !isAdaptiveNudge);
+  const aiEnabled = parseBoolean(req.query?.ai, !isAdaptiveNudge || req.path === '/personal-insight');
 
   return aiEnabled !== true;
 }
