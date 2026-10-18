@@ -6,6 +6,13 @@ import { BURNOUT_SCORING_VERSION } from './burnoutEvidencePolicy.js';
 
 const PATTERN_WINDOWS = [1, 2, 3, 7, 14, 28];
 const MAX_WINDOW_DAYS = Math.max(...PATTERN_WINDOWS);
+// Daily estimates are produced by the legacy, ordinary-day, and weekly-day
+// engines. All three must be visible to the dashboard's risk stat and trend.
+const PATTERN_SCORING_VERSIONS = [
+  BURNOUT_SCORING_VERSION,
+  'burnout_engine_v5_daily14_v1',
+  'burnout_engine_v6_core9_v1'
+];
 const DAILY_LOG_BACKED_SCORE_FILTER =
   "source_snapshot ? 'daily_log' AND source_snapshot->'daily_log' <> 'null'::jsonb";
 
@@ -617,7 +624,7 @@ async function loadScoresForPattern(client, userId, endDate) {
      WHERE user_id = $1
        AND score_date BETWEEN $2 AND $3
        AND ${DAILY_LOG_BACKED_SCORE_FILTER}
-       AND scoring_version = '${BURNOUT_SCORING_VERSION}'
+       AND scoring_version = ANY($4::TEXT[])
        AND (
          baseline_epoch_id = (
            SELECT baseline_epoch_id
@@ -633,7 +640,7 @@ async function loadScoresForPattern(client, userId, endDate) {
          )
        )
      ORDER BY score_date ASC`,
-    [userId, startDate, endDate]
+    [userId, startDate, endDate, PATTERN_SCORING_VERSIONS]
   );
 
   return result.rows.map(formatBurnoutScoreRow);

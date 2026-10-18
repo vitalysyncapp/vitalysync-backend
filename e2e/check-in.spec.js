@@ -21,6 +21,41 @@ async function dueToday(database, userId) {
     VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET next_pulse_due_date = $2`, [userId, today()]);
 }
 
+async function expectDashboardScore(request, headers, savedScore) {
+  const latestResponse = await request.get(`${apiUrl}/api/burnout/scores/latest`, { headers });
+  expect(latestResponse.ok(), await latestResponse.text()).toBeTruthy();
+  const latest = (await latestResponse.json()).score;
+  const expectedScore = {
+    score_date: savedScore.score_date,
+    overall_score: savedScore.overall_score,
+    risk_level: savedScore.risk_level,
+    scoring_version: savedScore.scoring_version,
+  };
+  expect(latest).toMatchObject(expectedScore);
+
+  // Both persisted and recalculated summaries must expose the same daily
+  // estimate in the dashboard risk stat and its seven-day chart.
+  for (const refresh of [false, true]) {
+    const response = await request.get(
+      `${apiUrl}/api/burnout/patterns/summary?end=${savedScore.score_date}&refresh=${refresh}`,
+      { headers },
+    );
+    expect(response.ok(), await response.text()).toBeTruthy();
+    const summary = await response.json();
+    expect(summary.latest_score).toMatchObject(expectedScore);
+    expect(summary.windows['7_day'].latest_score).toBe(savedScore.overall_score);
+    expect(summary.windows['7_day'].points).toHaveLength(1);
+    expect(summary.windows['7_day'].points[0]).toMatchObject({
+      score_date: savedScore.score_date,
+      overall_score: savedScore.overall_score,
+    });
+    expect(summary.timeline).toMatchObject([{
+      score_date: savedScore.score_date,
+      overall_score: savedScore.overall_score,
+    }]);
+  }
+}
+
 test('API persists baseline, daily and weekly logs with independently checked scores', async ({ request, system }) => {
   const user = await system.createUser(request);
   const { database } = system;
@@ -44,6 +79,7 @@ test('API persists baseline, daily and weekly logs with independently checked sc
   expect(Number(firstBody.burnout_score.overall_score)).toBe(4.51);
   expect(firstBody.burnout_score.data_points_count).toBe(14);
   expect(firstBody.log.log_date).toBe(today());
+  await expectDashboardScore(request, headers, firstBody.burnout_score);
   await dueToday(database, userId);
   const status = await request.get(`${apiUrl}/api/logs/check-in/status?date=${today()}&schema_version=3`, { headers });
   const checkInStatus = await status.json();
@@ -62,6 +98,7 @@ test('API persists baseline, daily and weekly logs with independently checked sc
   expect(storedDaily).toHaveLength(1);
   expect(storedDaily[0].questionnaire_version).toBe('daily_core9_v3');
   expect(Number(storedDaily[0].hydration_liters)).toBe(2.5);
+  await expectDashboardScore(request, headers, secondBody.burnout_score);
   const scoresBefore = (await database.query('SELECT * FROM burnout_score_history WHERE user_id = $1', [userId])).rows;
   expect(scoresBefore).toHaveLength(1);
   expect(Number(scoresBefore[0].overall_score)).toBe(6.52);
