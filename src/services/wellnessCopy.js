@@ -3,8 +3,8 @@
 const ACTIONS = {
   recovery: [
     ['screen_break', 'A little breathing room', 'Before your next task, take a two-minute off-screen pause.', 'Take a pause', 'Kaunting pahinga muna', 'Bago ang susunod na task, mag-pause nang two minutes na walang screen.', 'Mag-pause'],
-    ['quiet_break', 'Make room for a reset', 'Find a quiet spot for one short break. This moment can be yours.', 'Take a quiet break', 'Oras para mag-reset', 'Humanap ng tahimik na lugar para sa isang maikling break. Para sa iyo ang oras na ito.', 'Tahimik na break'],
-    ['protect_break', 'One thing for yourself', 'Set aside one uninterrupted break today. Keep it small enough to fit.', 'Protect a break', 'Isang bagay para sa sarili', 'Maglaan ng isang break na walang istorbo ngayon. Kahit maikli lang, puwede.', 'Maglaan ng break']
+    ['shoulder_release', 'Let your shoulders settle', 'Gently lower your shoulders and relax your hands for a few moments.', 'Relax your shoulders', 'Luwagan muna ang balikat', 'Dahan-dahang ibaba ang balikat at i-relax ang mga kamay nang ilang sandali.', 'I-relax ang balikat'],
+    ['grounding_pause', 'Notice the space around you', 'Pause and name three things you can see around you. Take your time noticing each one.', 'Notice your surroundings', 'Pansinin ang paligid', 'Huminto sandali at pangalanan ang tatlong bagay na nakikita mo. Dahan-dahan lang.', 'Pansinin ang paligid']
   ],
   workload: [
     ['shrink_task', 'A smaller next step', 'Pick one demanding task and make its next step smaller. Start there.', 'Shrink one task', 'Mas maliit na next step', 'Pumili ng isang mabigat na task at paliitin ang next step. Doon muna magsimula.', 'Paliitin ang task'],
@@ -22,9 +22,9 @@ const ACTIONS = {
     ['share_moment', 'One moment to share', 'Share one small part of your day with someone you feel comfortable with.', 'Share a moment', 'May puwedeng ibahagi', 'Ibahagi ang isang maliit na bahagi ng araw mo sa taong komportable kang kausap.', 'Magbahagi ng sandali']
   ],
   maintenance: [
-    ['keep_routine', 'Keep it manageable', 'Choose one recovery routine that fits today. Let simple be enough.', 'Keep one routine', 'Simple lang muna', 'Pumili ng isang recovery routine na kasya sa araw mo. Sapat na ang simple.', 'Isang routine muna'],
-    ['save_space', 'A little space for you', 'Leave a small gap between two tasks today for a pause.', 'Leave a small gap', 'Kaunting space para sa iyo', 'Mag-iwan ng kaunting pagitan sa dalawang task ngayon para makapag-pause.', 'Maglaan ng pagitan'],
-    ['easy_evening', 'An easier finish', 'Choose one simple way to wind down when your day is done.', 'Plan a wind-down', 'Mas magaan na pagtatapos', 'Pumili ng isang simpleng paraan para mag-wind down sa pagtatapos ng araw.', 'Magplano ng wind-down']
+    ['keep_routine', 'Keep it manageable', 'Set aside two quiet minutes before your next task. Put your screen aside for that pause.', 'Keep one routine', 'Simple lang muna', 'Maglaan ng two minutes na tahimik bago ang susunod na task. Itabi muna ang screen.', 'Isang routine muna'],
+    ['choose_priority', 'Give your next step a place', 'Write down the one task you want to give your attention to next.', 'Choose a priority', 'Linawin ang next step', 'Isulat ang isang task na gusto mong pagtuunan ng pansin sa susunod.', 'Pumili ng priority'],
+    ['easy_evening', 'An easier finish', 'Put your phone aside for a few quiet minutes before you settle down for the evening.', 'Plan a wind-down', 'Mas magaan na pagtatapos', 'Itabi ang phone nang ilang tahimik na minuto bago magpahinga sa gabi.', 'Magplano ng wind-down']
   ],
   data: [
     ['daily_checkin', 'Start with today', 'A quick check-in gives your next suggestion something personal to work with.', 'Log a check-in', 'Magsimula sa ngayon', 'Makakatulong ang quick check-in para mas personal ang susunod na suggestion.', 'Mag-check-in'],
@@ -49,7 +49,7 @@ export function wellnessVariants(recommendation, locale = 'en') {
     const offset = locale === 'fil' ? 4 : 1;
     return {
       ...recommendation, title: row[offset], message: row[offset + 1], action_label: row[offset + 2],
-      metadata: { ...recommendation.metadata, action_id: row[0], variant_id: `${family}_${index}_${locale}` }
+      metadata: { ...recommendation.metadata, action_id: row[0], variant_id: `${family}_${index}_${locale}`, approved_action: row[offset + 1] }
     };
   });
 }

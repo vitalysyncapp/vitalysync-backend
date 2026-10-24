@@ -136,9 +136,9 @@ test('personal insights use actual recorded comparisons only with enough coverag
 
 test('natural wording preserves actions and rejects new measurements, claims and unknown action IDs', async () => {
   const item = variants()[0];
-  const valid = { title: 'A moment for you', bridge: 'Keep it simple.', action_id: item.metadata.action_id };
-  assert.ok(applyCompanionWording(item, valid).message.endsWith(item.message));
-  for (const output of [{ ...valid, bridge: 'You slept 8 hours.' }, { ...valid, bridge: 'Your stress improved.' }, { ...valid, action_id: 'other' }]) {
+  const valid = { title: 'A moment for you', encouragement: 'There is no need to rush.', approved_action: item.message, action_id: item.metadata.action_id };
+  assert.ok(applyCompanionWording(item, valid).message.startsWith(item.message + '\n\n'));
+  for (const output of [{ ...valid, encouragement: 'You slept 8 hours.' }, { ...valid, title: 'Your stress improved.' }, { ...valid, action_id: 'other' }]) {
     assert.equal(applyCompanionWording(item, output), null);
   }
   const fallback = await enhanceCompanionWording(item, { generate: async () => { throw new Error('offline'); } });

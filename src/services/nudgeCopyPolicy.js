@@ -51,7 +51,8 @@ export function validateNudgeCopy({
   message,
   actionLabel,
   displayName = null,
-  additionalText = []
+  additionalText = [],
+  maxMessageLength = NUDGE_COPY_LIMITS.message
 }) {
   const normalizedTitle = normalizedText(title);
   const normalizedMessage = normalizedText(message);
@@ -68,7 +69,7 @@ export function validateNudgeCopy({
   if (normalizedTitle.length > NUDGE_COPY_LIMITS.title) {
     errors.push('title_too_long');
   }
-  if (normalizedMessage.length > NUDGE_COPY_LIMITS.message) {
+  if (normalizedMessage.length > maxMessageLength) {
     errors.push('message_too_long');
   }
   if (normalizedAction.length > NUDGE_COPY_LIMITS.actionLabel) {

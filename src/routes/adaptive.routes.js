@@ -3,6 +3,8 @@ import express from 'express';
 import { rateLimiters } from '../middleware/rateLimit.middleware.js';
 
 import {
+  getSavedSmartNudge,
+  respondToSmartNudgeDelivery,
   createNotificationEvent,
   createNudgeEvent,
   getNudgeRecommendations,
@@ -38,6 +40,8 @@ router.post(
   refreshInsightReports
 );
 
+router.get('/nudges/:contentId', getSavedSmartNudge);
+router.post('/nudges/:contentId/delivery', respondToSmartNudgeDelivery);
 router.get('/nudge-events', listNudgeEvents);
 router.post('/nudge-events', createNudgeEvent);
 router.put('/nudge-events/:eventId/status', updateNudgeEventStatus);

@@ -305,20 +305,9 @@ export async function enhanceNudgeRecommendation(
   { summary, preferences, personalization = null, locale = 'en', recentMessages = [] }
 ) {
   if (recommendation.metadata?.content_version) {
-    const result = await enhanceCompanionWording(recommendation, {
-      locale, style: preferences.preferredNudgeStyle, recentMessages
+    return enhanceCompanionWording(recommendation, {
+      client, userId, locale, style: preferences.preferredNudgeStyle, recentMessages
     });
-    if (!recommendation.metadata.reused_content) {
-      await recordAiGeneration(client, {
-        userId, recommendation: result,
-        model: process.env.OPENAI_NUDGE_MODEL || DEFAULT_OPENAI_NUDGE_MODEL,
-        context: { evidence: recommendation.metadata.evidence, action_id: recommendation.metadata.action_id,
-          content_id: recommendation.metadata.content_id, version: 'companion_bridge_v1', locale },
-        output: { title: result.title, message: result.message },
-        validationStatus: result.metadata.ai_enhanced ? 'valid' : 'fallback'
-      });
-    }
-    return result;
   }
   const model = process.env.OPENAI_NUDGE_MODEL || DEFAULT_OPENAI_NUDGE_MODEL;
   const context = buildAiContext(

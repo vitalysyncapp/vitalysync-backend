@@ -1,5 +1,5 @@
 import { enhanceNudgeRecommendations } from './aiNudgeService.js';
-import { buildWellnessContext, identifyContent, personalEvidence, selectContent } from './wellnessContentService.js';
+import { buildWellnessContext, identifyContent, personalEvidence, selectContent, contentSelectionState } from './wellnessContentService.js';
 import { wellnessVariants } from './wellnessCopy.js';
 import {
   localizeAdaptiveSummary,
@@ -598,6 +598,8 @@ export async function loadNudgePersonalizationProfile(client, userId) {
 }
 
 export function personalizeNudgeRecommendation(recommendation, personalization) {
+  // Finalized copy is immutable across card, overlay, history, and notification.
+  if (recommendation.metadata?.reused_content) return recommendation;
   const userDisplayName = personalization?.displayName ?? null;
   const personalizedMessage = recommendation.message;
   const validation = validateNudgeCopy({
@@ -739,6 +741,7 @@ export function applyRecentFeedback(recommendations, recentEvents, preferences) 
   const now = new Date();
   const shownTodayCount = recentEvents.filter((event) =>
     ['shown', 'accepted', 'completed', 'snoozed'].includes(event.status) &&
+    (eventMetadata(event).generated_only !== true || ['pending', 'claimed', 'scheduled', 'sent'].includes(eventMetadata(event).delivery?.state)) &&
     hoursSince(event.created_at, now) <= 24
   ).length;
   const dailyLimitReached = shownTodayCount >= preferences.maxDailyNudges;
@@ -747,6 +750,7 @@ export function applyRecentFeedback(recommendations, recentEvents, preferences) 
     .map((recommendation) => {
       const sameTypeEvent = recentEvents.find((event) =>
         event.nudge_type === recommendation.nudge_type &&
+        (eventMetadata(event).generated_only !== true || ['pending', 'claimed', 'scheduled', 'sent'].includes(eventMetadata(event).delivery?.state)) &&
         ['shown', 'completed', 'snoozed'].includes(event.status)
       );
       const recentlyDismissedEvents = recentEvents.filter((event) =>
@@ -920,7 +924,7 @@ async function attachShownEvent(client, userId, recommendation, preferences) {
 export async function getAdaptiveNudgeRecommendations(
   client,
   userId,
-  { limit = 3, recordShown = false, endDate, useAi = false, locale = 'en' } = {}
+  { limit = 3, recordShown = false, endDate, useAi = false, locale = 'en', selectionMode = 'default', excludeActionIds = [] } = {}
 ) {
   const normalizedLimit = boundedLimit(limit);
   const summary = await getBurnoutPatternSummary(client, userId, { endDate });
@@ -941,6 +945,8 @@ export async function getAdaptiveNudgeRecommendations(
   );
   const context = buildWellnessContext(summary, personalization, preferences, locale);
   const selected = [];
+  const eligibleVariants = [];
+  const selectionOptions = { selectionMode, excludeActionIds, cooldownHours: preferences.cooldownHours };
   const strongest = ranked.find((item) => ['high', 'urgent'].includes(item.priority));
   for (const recommendation of ranked) {
     // Exhausting support actions must not turn a strong signal into unrelated
@@ -951,23 +957,22 @@ export async function getAdaptiveNudgeRecommendations(
         evidence: personalEvidence(summary, personalization.profile, recommendation.recommended_focus, locale) ||
           localizeNudgeRecommendation(recommendation, locale).trigger_reason
       } }, { surface: 'wellness', context, locale }));
-    const chosen = selectContent(variants, recentEvents, {
-      cooldownHours: preferences.cooldownHours
-    });
+    eligibleVariants.push(...variants);
+    const chosen = selectContent(variants, recentEvents, selectionOptions);
     if (chosen && !selected.some((item) => item.metadata.action_id === chosen.metadata.action_id)) selected.push(chosen);
     if (selected.length >= normalizedLimit) break;
   }
   const personalizedRanked = selected.map((recommendation) =>
     personalizeNudgeRecommendation(recommendation, personalization));
   const recommendations = useAi
-    ? await enhanceNudgeRecommendations(client, userId, personalizedRanked, {
+    ? [...await enhanceNudgeRecommendations(client, userId, personalizedRanked.slice(0, 1), {
       summary,
       preferences,
       personalization,
       locale,
       recentMessages: recentEvents.map((event) => event.message).filter(Boolean).slice(0, 8),
       enhanceThrottled: !recordShown
-    })
+    }), ...personalizedRanked.slice(1)]
     : personalizedRanked;
   const localizedRecommendations = recommendations.map((recommendation) =>
     localizeNudgeRecommendation(recommendation, locale)
@@ -977,6 +982,7 @@ export async function getAdaptiveNudgeRecommendations(
   if (!recordShown || localizedRecommendations.length === 0) {
     return {
       summary: localizedSummary,
+      selection: contentSelectionState(eligibleVariants, recentEvents, selected[0], selectionOptions),
       recommendations: localizedRecommendations
     };
   }
@@ -990,6 +996,7 @@ export async function getAdaptiveNudgeRecommendations(
 
   return {
     summary: localizedSummary,
+    selection: contentSelectionState(eligibleVariants, recentEvents, selected[0], selectionOptions),
     recommendations: [primary, ...localizedRecommendations.slice(1)]
   };
 }

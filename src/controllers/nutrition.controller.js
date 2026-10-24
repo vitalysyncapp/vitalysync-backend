@@ -1,3 +1,4 @@
+import { parseSelectionOptions } from '../services/wellnessContentService.js';
 import pool from '../config/db.js';
 import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import {
@@ -553,7 +554,10 @@ export async function getAssistantNutritionNudge(req, res) {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const selectionOptions = parseSelectionOptions(req.query);
+    if (!selectionOptions) return res.status(400).json({ message: 'Invalid selection options' });
     const insight = await getNutritionAssistantNudgeForUser(pool, userId, {
+      ...selectionOptions, includeSelection: true,
       date: logDate,
       useAi,
       locale: req.locale

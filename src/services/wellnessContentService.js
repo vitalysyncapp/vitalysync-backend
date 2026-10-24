@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 
-export const CONTENT_VERSION = 'companion_v1';
+export const CONTENT_VERSION = 'companion_v2';
 export const CONTENT_INTERACTIONS = new Set(['shown', 'done', 'another_idea', 'not_now', 'like', 'dislike']);
 const HOUR = 3600000;
 
@@ -20,15 +20,41 @@ function recent(value, hours, now) {
   return Number.isFinite(age) && age >= 0 && age < hours * HOUR;
 }
 
-export function actionUnavailable(candidate, events, now = new Date()) {
+export function actionUnavailable(candidate, events, now = new Date(), { selectionMode = 'default', cooldownHours = 8, excludeActionIds = [] } = {}) {
   const action = candidate.metadata?.action_id;
+  if (excludeActionIds.includes(action)) return true;
   return events.some((event) => {
     const metadata = eventMetadata(event);
     if (!action || metadata.action_id !== action) return false;
+    if (metadata.surface && metadata.surface !== candidate.metadata?.surface) return false;
+    const sameContext = metadata.context_hash === candidate.metadata?.context_hash;
     return recent(metadata.completed_at, 24, now) ||
-      recent(metadata.skipped_at, 24, now) ||
+      (selectionMode !== 'revisit' && sameContext && recent(metadata.skipped_at, cooldownHours, now)) ||
       (new Date(metadata.snoozed_until).getTime() > now.getTime());
   });
+}
+
+export function parseSelectionOptions(query = {}) {
+  const selectionMode = query.selection_mode ?? 'default';
+  if (!['default', 'next', 'revisit'].includes(selectionMode)) return null;
+  const raw = query.exclude_action_ids ?? '';
+  if (typeof raw !== 'string' || raw.length > 4096) return null;
+  const excludeActionIds = [...new Set(raw.split(',').filter(Boolean))];
+  if (excludeActionIds.length > 40 || excludeActionIds.some((id) => !/^[a-zA-Z0-9_-]{1,100}$/.test(id))) return null;
+  return { selectionMode, excludeActionIds };
+}
+
+export function contentSelectionState(candidates, events, selected, options = {}) {
+  const now = options.now ?? new Date();
+  const currentAction = options.excludeActionIds?.at(-1);
+  const revisitable = candidates.some((candidate) =>
+    !actionUnavailable(candidate, events, now, { ...options, selectionMode: 'revisit', excludeActionIds: currentAction ? [currentAction] : [] }) &&
+    events.some((event) => {
+      const metadata = eventMetadata(event);
+      return metadata.action_id === candidate.metadata.action_id &&
+        metadata.context_hash === candidate.metadata.context_hash && Boolean(metadata.skipped_at);
+    }));
+  return { status: selected ? 'available' : 'exhausted', can_revisit: revisitable };
 }
 
 export function interactionPatch(event, interaction, now = new Date()) {
@@ -39,11 +65,16 @@ export function interactionPatch(event, interaction, now = new Date()) {
   // Exposure retries must not erase a later response or restart its cooldown.
   if (interaction === 'shown') {
     metadata.displayed_at ??= at;
+    metadata.generated_only = false;
   } else {
     metadata.last_interaction = interaction;
     metadata.interacted_at = at;
     if (interaction === 'done') { metadata.completed_at ??= at; status = 'completed'; }
     if (interaction === 'another_idea') metadata.skipped_at = at;
+    if (['done', 'another_idea', 'not_now'].includes(interaction) && metadata.delivery &&
+        ['pending', 'claimed', 'scheduled'].includes(metadata.delivery.state)) {
+      metadata.delivery = { ...metadata.delivery, state: 'cancelled', reason: interaction };
+    }
     if (interaction === 'not_now') {
       const hours = Math.min(48, Math.max(1, Number(metadata.nudge_cooldown_hours) || 8));
       metadata.snoozed_until = new Date(now.getTime() + hours * HOUR).toISOString();
@@ -117,11 +148,11 @@ export function identifyContent(candidate, { surface, context, locale = 'en', no
 
 // Stable across fetches; rotate only at a relevant context change or cooldown.
 // Call this within one priority tier so novelty cannot outrank a stronger signal.
-export function selectContent(candidates, events, { now = new Date(), cooldownHours = 8, persistent = false } = {}) {
+export function selectContent(candidates, events, { now = new Date(), cooldownHours = 8, persistent = false, selectionMode = 'default', excludeActionIds = [] } = {}) {
   if (!candidates.length) return null;
-  const eligible = candidates.filter((candidate) => !actionUnavailable(candidate, events, now));
+  const eligible = candidates.filter((candidate) => !actionUnavailable(candidate, events, now, { selectionMode, cooldownHours, excludeActionIds }));
   if (!eligible.length) return null;
-  for (const event of events) {
+  for (const event of selectionMode === 'default' ? events : []) {
     const metadata = eventMetadata(event);
     const candidate = eligible.find((item) => item.metadata.content_id === (metadata.candidate_id ?? metadata.content_id));
     if (!candidate || metadata.helpfulness === 'dislike' || event.status === 'dismissed') continue;
@@ -131,7 +162,8 @@ export function selectContent(candidates, events, { now = new Date(), cooldownHo
         message: event.message ?? candidate.message,
         action_label: event.action_label ?? candidate.action_label,
         nudge_event_id: event.nudge_event_id,
-        metadata: { ...candidate.metadata, ...metadata, reused_content: true }
+        metadata: { ...candidate.metadata, ...metadata, throttled: candidate.metadata.throttled,
+          throttle_reason: candidate.metadata.throttle_reason, reused_content: true }
       };
     }
   }

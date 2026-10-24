@@ -3,7 +3,7 @@ import { localizeNutritionNudge } from '../i18n/generatedCopy.js';
 
 import { calculateTotals, toNumber } from './nutrition.service.js';
 import { analyzeNutritionMealPatterns } from './nutritionPatternService.js';
-import { identifyContent, selectContent } from './wellnessContentService.js';
+import { identifyContent, selectContent, contentSelectionState } from './wellnessContentService.js';
 import { nutritionVariants } from './wellnessCopy.js';
 import { enhanceCompanionWording } from './companionWordingService.js';
 import { loadNudgeThrottlePreferences } from './adaptiveNudgeService.js';
@@ -518,7 +518,8 @@ export function buildDeterministicNutritionAssistantNudge({
   summary,
   recentSummaries = [],
   recentEvents = [],
-  now = new Date()
+  now = new Date(),
+  returnAll = false
 }) {
   const candidates = buildNutritionAssistantNudgeCandidates({
     summary,
@@ -553,7 +554,7 @@ export function buildDeterministicNutritionAssistantNudge({
     );
   });
 
-  return ranked[0] ?? null;
+  return returnAll ? ranked : ranked[0] ?? null;
 }
 
 function parseJsonResponse(response) {
@@ -645,11 +646,10 @@ function resolveCuratedNutritionSelection(deterministic, selection) {
   };
 }
 
-export async function enhanceNutritionAssistantNudge(insight) {
+export async function enhanceNutritionAssistantNudge(insight, { client = null, userId = null } = {}) {
   if (insight.metadata?.content_version) {
     return enhanceCompanionWording(insight, {
-      model: process.env.OPENAI_NUTRITION_NUDGE_MODEL || DEFAULT_OPENAI_NUTRITION_NUDGE_MODEL,
-      maxLength: 180, locale: insight.metadata.locale,
+      client, userId, maxLength: 240, locale: insight.metadata.locale,
       style: insight.metadata.preferred_nudge_style ?? 'Gentle'
     });
   }
@@ -709,33 +709,39 @@ export async function buildNutritionAssistantNudgeResponse({
   useAi = true,
   locale = 'en',
   preferences = { preferredNudgeStyle: 'Gentle', cooldownHours: 8 },
-  aiEnhancer = enhanceNutritionAssistantNudge
+  aiEnhancer = enhanceNutritionAssistantNudge,
+  selectionMode = 'default', excludeActionIds = [], includeSelection = false,
+  client = null, userId = null
 }) {
-  const deterministic = buildDeterministicNutritionAssistantNudge({
-    summary,
-    recentSummaries,
-    recentEvents,
-    now
-  });
-
-  if (!deterministic) return null;
-  const localized = localizeNutritionNudge(deterministic, locale);
+  const ranked = buildDeterministicNutritionAssistantNudge({ summary, recentSummaries, recentEvents, now, returnAll: true });
   const context = { locale, summary: normalizeSummary(summary),
     recent: recentSummaries.map((item) => ({ date: item.date, totals: item.day_totals })),
     style: preferences.preferredNudgeStyle };
-  const variants = nutritionVariants(localized, locale).map((variant) => identifyContent({
-    ...variant, metadata: { ...variant.metadata,
-      evidence: localized.message.split(/(?<=\.)\s/)[0],
-      preferred_nudge_style: preferences.preferredNudgeStyle,
-      nudge_cooldown_hours: preferences.cooldownHours }
-  }, { surface: 'nutrition', context, locale, now }));
-  const selected = selectContent(variants, recentEvents, { now, cooldownHours: preferences.cooldownHours });
-  if (!selected) return null;
+  const options = { now, cooldownHours: preferences.cooldownHours, selectionMode, excludeActionIds };
+  const variants = ranked.flatMap((candidate) => {
+    const localized = localizeNutritionNudge(candidate, locale);
+    return nutritionVariants(localized, locale).map((variant) => identifyContent({
+      ...variant, metadata: { ...variant.metadata,
+        evidence: localized.message.split(/(?<=\.)\s/)[0],
+        preferred_nudge_style: preferences.preferredNudgeStyle,
+        nudge_cooldown_hours: preferences.cooldownHours }
+    }, { surface: 'nutrition', context, locale, now }));
+  });
+  // Try the next ranked topic after a topic's actual actions are exhausted.
+  let selected = null;
+  for (const candidate of ranked) {
+    selected = selectContent(variants.filter((item) => item.metadata.macro_focus === candidate.metadata.macro_focus), recentEvents, options);
+    if (selected) break;
+  }
+  const selectionState = contentSelectionState(variants, recentEvents, selected, options);
+  if (!selected) return includeSelection ? { selection: selectionState } : null;
+  if (includeSelection) selected.selection = selectionState;
   selected.id = selected.metadata.content_id;
   if (!useAi || selected.metadata.reused_content) return selected;
 
   try {
-    const selection = await aiEnhancer(selected);
+    const selection = aiEnhancer === enhanceNutritionAssistantNudge
+      ? await aiEnhancer(selected, { client, userId }) : await aiEnhancer(selected);
     if (selection?.metadata?.content_id === selected.metadata.content_id) return selection;
     const safe = resolveCuratedNutritionSelection(selected, selection);
     if (safe) {
@@ -862,7 +868,7 @@ async function loadRecentNutritionFeedback(client, userId) {
 export async function getNutritionAssistantNudge(
   client,
   userId,
-  { date = safeDateKey(), useAi = true, locale = 'en' } = {}
+  { date = safeDateKey(), useAi = true, locale = 'en', selectionMode = 'default', excludeActionIds = [], includeSelection = false } = {}
 ) {
   const recentSummaries = await loadNutritionWindow(client, userId, date);
   const summary = recentSummaries[recentSummaries.length - 1];
@@ -873,6 +879,7 @@ export async function getNutritionAssistantNudge(
     summary,
     recentSummaries,
     recentEvents,
+    client, userId, selectionMode, excludeActionIds, includeSelection,
     now: new Date(),
     preferences,
     useAi,

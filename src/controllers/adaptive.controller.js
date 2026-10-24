@@ -1,6 +1,8 @@
+import { finalizeSmartNudge, readSmartNudge, updateSmartNudgeDelivery } from '../services/smartNudgeDeliveryService.js';
+import { validInsightDate } from '../services/personalInsightContext.js';
 import pool from '../config/db.js';
 import { getPersonalInsight } from '../services/personalInsightService.js';
-import { CONTENT_INTERACTIONS, interactionPatch, saveContentEvent } from '../services/wellnessContentService.js';
+import { CONTENT_INTERACTIONS, interactionPatch, saveContentEvent, parseSelectionOptions } from '../services/wellnessContentService.js';
 import { getAuthenticatedUserId } from '../middleware/auth.middleware.js';
 import {
   getAdaptiveNudgeRecommendations
@@ -504,7 +506,9 @@ export async function getPersonalInsightForUser(req, res) {
   if (!userId || useAi === undefined) return res.status(400).json({ message: 'Valid user and ai flag are required' });
   try {
     if (!await ensureUserExists(pool, userId)) return res.status(404).json({ message: 'User not found' });
-    const insight = await getPersonalInsight(pool, userId, { locale: req.locale, useAi });
+    const endDate = req.query.date ?? new Date().toISOString().slice(0, 10);
+    if (!validInsightDate(endDate)) return res.status(400).json({ message: 'Valid date is required' });
+    const insight = await getPersonalInsight(pool, userId, { locale: req.locale, useAi, endDate });
     return res.status(200).json({ insight });
   } catch (error) {
     console.error('Personal insight error:', error.message);
@@ -513,6 +517,8 @@ export async function getPersonalInsightForUser(req, res) {
 }
 
 export async function getNudgeRecommendations(req, res) {
+  const selectionOptions = parseSelectionOptions(req.query);
+  if (!selectionOptions) return res.status(400).json({ message: 'Invalid selection options' });
   const userId = getRequestUserId(req, req.query.user_id);
   const limit = parseLimitedInt(req.query.limit, 3, 5);
   const recordShown = req.query.record == null
@@ -541,15 +547,22 @@ export async function getNudgeRecommendations(req, res) {
     }
 
     const result = await getAdaptiveNudgeRecommendations(pool, userId, {
+      ...selectionOptions,
       limit,
       recordShown,
       useAi,
       locale: req.locale
     });
+    if (req.query.delivery === 'true' && result.recommendations[0]) {
+      result.recommendations[0] = await finalizeSmartNudge(pool, userId, result.recommendations[0], {
+        trigger: selectionOptions.selectionMode === 'next' ? 'another_idea' : selectionOptions.selectionMode === 'revisit' ? 'revisit' : 'context_update'
+      });
+    }
     const primaryRecommendation = result.recommendations[0] ?? null;
 
     return res.status(200).json({
       recommendations: result.recommendations,
+      selection: result.selection,
       primary_recommendation: primaryRecommendation,
       adaptive_state: result.summary.adaptive_state,
       patterns: result.summary.patterns,
@@ -1001,4 +1014,28 @@ export async function updateNotificationEventStatus(req, res) {
     console.error('Update notification event error:', error);
     return res.status(500).json({ message: 'Failed to update notification event' });
   }
+}
+
+export async function getSavedSmartNudge(req, res) {
+  const userId = getRequestUserId(req, req.query.user_id);
+  if (!userId || !/^[a-f0-9]{32}$/.test(req.params.contentId)) return res.status(400).json({ message: 'Invalid nudge identity' });
+  try {
+    const recommendation = await readSmartNudge(pool, userId, req.params.contentId);
+    return res.status(recommendation ? 200 : 404).json({ recommendation });
+  } catch { return res.status(500).json({ message: 'Nudge unavailable' }); }
+}
+
+export async function respondToSmartNudgeDelivery(req, res) {
+  const userId = getRequestUserId(req, req.body.user_id);
+  if (!userId || !/^[a-f0-9]{32}$/.test(req.params.contentId) ||
+      !['claim', 'sent', 'scheduled', 'failed', 'suppressed', 'cancelled'].includes(req.body.operation)) {
+    return res.status(400).json({ message: 'Invalid delivery response' });
+  }
+  try {
+    const result = await updateSmartNudgeDelivery(pool, userId, req.params.contentId, {
+      operation: req.body.operation, token: typeof req.body.token === 'string' ? req.body.token : null,
+      reason: typeof req.body.reason === 'string' ? req.body.reason.slice(0, 80) : null
+    });
+    return res.status(result ? 200 : 404).json(result ?? { message: 'Nudge unavailable' });
+  } catch { return res.status(500).json({ message: 'Delivery unavailable' }); }
 }
