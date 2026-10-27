@@ -156,6 +156,7 @@ export function selectContent(candidates, events, { now = new Date(), cooldownHo
     const metadata = eventMetadata(event);
     const candidate = eligible.find((item) => item.metadata.content_id === (metadata.candidate_id ?? metadata.content_id));
     if (!candidate || metadata.helpfulness === 'dislike' || event.status === 'dismissed') continue;
+    if (metadata.next_due_at && new Date(metadata.next_due_at).getTime() <= now.getTime()) continue;
     if (persistent || recent(metadata.displayed_at ?? event.created_at, cooldownHours, now)) {
       return {
         ...candidate, title: metadata.title ?? candidate.title,

@@ -551,6 +551,7 @@ export async function getNudgeRecommendations(req, res) {
       limit,
       recordShown,
       useAi,
+      persistLatest: req.query.delivery === 'true',
       locale: req.locale
     });
     if (req.query.delivery === 'true' && result.recommendations[0]) {

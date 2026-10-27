@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildPersonalHighlights, validInsightDate, loadPersonalInsightContext } from '../src/services/personalInsightContext.js';
-import { buildWellnessInsight, validInsightWording } from '../src/services/personalInsightService.js';
+import { buildWellnessInsight, validInsightWording, enhancePersonalInsight } from '../src/services/personalInsightService.js';
 import { enhanceCompanionWording } from '../src/services/companionWordingService.js';
 import { personalizeNudgeRecommendation } from '../src/services/adaptiveNudgeService.js';
 import { generateCompanionJson } from '../src/services/companionGenerationService.js';
 import { wellnessVariants } from '../src/services/wellnessCopy.js';
 import { identifyContent, selectContent, interactionPatch, contentSelectionState, parseSelectionOptions } from '../src/services/wellnessContentService.js';
 import { buildNutritionAssistantNudgeResponse } from '../src/services/nutritionAssistantNudgeService.js';
-import { finalizeSmartNudge, updateSmartNudgeDelivery, readSmartNudge, deliveryClaimable } from '../src/services/smartNudgeDeliveryService.js';
+import { finalizeSmartNudge, updateSmartNudgeDelivery, readSmartNudge, deliveryClaimable, currentSmartNudge } from '../src/services/smartNudgeDeliveryService.js';
 
 const now = new Date('2026-10-23T10:00:00Z');
 const base = { nudge_type: 'maintenance', recommended_focus: 'maintenance', priority: 'low', severity: 'steady' };
@@ -159,10 +159,50 @@ test('local calendar boundaries and sparse meal logging never become claims of m
   const insight = buildWellnessInsight({}, { end_date: '2026-10-23', nutrition: [{ log_date: '2026-10-23', meal_count: 1 }] });
   assert.equal(insight.metadata.highlights[0].coverage.recorded_days, 1);
   assert.doesNotMatch(insight.message, /skipped|missed|improv/i);
-  const valid = { title: 'A glimpse of your meal logs', summary: 'Your meal logs offer a starting point. The rest of the week remains unknown.', topics: ['nutrition'] };
+  const valid = { title: 'A glimpse of your meal logs', summary: `${insight.metadata.recommendation} Your meal logs offer a starting point. The rest of the week remains unknown.`, topics: ['nutrition'] };
   assert.ok(validInsightWording(valid, insight));
   for (const summary of ['You skipped meals. Your diet improved.', 'You logged 5 meals. That is progress.', 'Sleep is higher. Your logs tell the story.', 'One incomplete fragment']) {
     assert.equal(validInsightWording({ ...valid, summary }, insight), false);
+  }
+});
+
+test('weekly paragraphs lead with a supported recommendation in both languages', () => {
+  for (const locale of ['en', 'fil']) {
+    const insight = buildWellnessInsight({}, {
+      end_date: '2026-10-23', daily: dailyRows(current, { sleep_hours: 6 }),
+    }, {}, locale);
+    assert.ok(insight.message.startsWith(insight.metadata.recommendation));
+    assert.ok(insight.message.length <= 420);
+    assert.doesNotMatch(insight.message, /\n|highlights below|sa ibaba/);
+    const summary = locale === 'fil'
+      ? `${insight.metadata.recommendation} May recent sleep logs na bilang panimulang context.`
+      : `${insight.metadata.recommendation} Your recent sleep logs offer a starting point.`;
+    const valid = { title: insight.title, summary, topics: ['sleep'] };
+    assert.ok(validInsightWording(valid, insight));
+    assert.equal(validInsightWording({ ...valid, summary: 'Your logs offer a starting point. Keep watching them.' }, insight), false);
+    assert.equal(validInsightWording({ ...valid, summary: summary.replace(' ', '\n') }, insight), false);
+    assert.equal(validInsightWording({ ...valid, summary: `${insight.metadata.recommendation} Your sleep is higher.` }, insight), false);
+  }
+});
+
+test('personal insight uses validated AI wording and preserves a complete paragraph on failure', async () => {
+  const insight = buildWellnessInsight({}, { end_date: '2026-10-23', daily: dailyRows(current, { sleep_hours: 6 }) });
+  const paragraph = `${insight.metadata.recommendation} Your recent sleep logs offer a starting point.`;
+  const enhanced = await enhancePersonalInsight(insight, { generate: async (context) => {
+    assert.equal(context.period.days, 7);
+    assert.equal(context.highlights[0].value, 6);
+    assert.equal(context.recommendation, insight.metadata.recommendation);
+    return { title: 'A little room for rest', summary: paragraph, topics: ['sleep'] };
+  } });
+  assert.equal(enhanced.message, paragraph);
+  assert.equal(enhanced.metadata.ai_enhanced, true);
+  assert.equal(enhanced.metadata.ai_fallback, false);
+  for (const generate of [async () => { throw new Error('timeout'); }, async () => ({
+    title: 'Unsupported', summary: 'Sleep was better. Take a break.', topics: ['sleep'],
+  })]) {
+    const fallback = await enhancePersonalInsight(insight, { generate });
+    assert.equal(fallback.message, insight.message);
+    assert.equal(fallback.metadata.ai_fallback, true);
   }
 });
 
@@ -255,11 +295,33 @@ test('permission suppression is recorded without changing the saved nudge', asyn
   assert.equal(deliveryClaimable(saved.metadata, now), false);
 });
 
+test('app and overlay keep finalized wording until due or explicitly replaced', async () => {
+  const db = deliveryDatabase();
+  const first = await finalizeSmartNudge(db, 1, selectContent(candidates(), [], { now }), { now });
+  const later = new Date(now.getTime() + 20 * 60000);
+  const changed = selectContent(candidates({ sleep: 5 }), [], { now: later });
+  const reopened = await finalizeSmartNudge(db, 1, changed, { now: later });
+  assert.equal(reopened.metadata.content_id, first.metadata.content_id);
+  assert.equal(reopened.message, first.message);
+  assert.equal(db.rows.length, 1);
+  assert.equal(currentSmartNudge(db.rows, { now: later, locale: 'fil' }), null);
+  assert.equal(currentSmartNudge(db.rows, { now: new Date(first.metadata.next_due_at) }), null);
+  const replaced = await finalizeSmartNudge(db, 1, changed, { now: later, trigger: 'another_idea' });
+  assert.notEqual(replaced.metadata.content_id, first.metadata.content_id);
+  assert.equal(currentSmartNudge(db.rows, { now: later }).metadata.content_id, replaced.metadata.content_id);
+  assert.equal(db.rows.length, 2);
+  const revisitedAt = new Date(later.getTime() + 60000);
+  const revisited = await finalizeSmartNudge(db, 1, first, { now: revisitedAt, trigger: 'revisit' });
+  assert.equal(currentSmartNudge(db.rows, { now: revisitedAt }).metadata.content_id, first.metadata.content_id);
+  assert.ok(new Date(revisited.metadata.next_due_at) > new Date(first.metadata.next_due_at));
+  assert.equal(db.rows.length, 2);
+});
+
 test('one shared daily allowance spans different actions and preserves elevated-support priority', async () => {
   const db = deliveryDatabase();
   for (let i = 0; i < 4; i++) {
     const item = { ...selectContent(candidates({ sequence: i }), [], { now }), nudge_type: `type_${i}` };
-    const saved = await finalizeSmartNudge(db, 1, item, { now });
+    const saved = await finalizeSmartNudge(db, 1, item, { now, trigger: 'another_idea' });
     assert.equal(saved.metadata.delivery.state, i < 3 ? 'pending' : 'suppressed');
     if (i < 3) {
       const claim = await updateSmartNudgeDelivery(db, 1, item.metadata.content_id, { operation: 'claim' }, now);
@@ -267,5 +329,5 @@ test('one shared daily allowance spans different actions and preserves elevated-
     }
   }
   const support = { ...selectContent(candidates({ support: true }), [], { now }), priority: 'high' };
-  assert.equal((await finalizeSmartNudge(db, 1, support, { now })).metadata.delivery.state, 'pending');
+  assert.equal((await finalizeSmartNudge(db, 1, support, { now, trigger: 'another_idea' })).metadata.delivery.state, 'pending');
 });

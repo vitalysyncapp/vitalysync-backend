@@ -1,4 +1,5 @@
 import { enhanceNudgeRecommendations } from './aiNudgeService.js';
+import { currentSmartNudge } from './smartNudgeDeliveryService.js';
 import { buildWellnessContext, identifyContent, personalEvidence, selectContent, contentSelectionState } from './wellnessContentService.js';
 import { wellnessVariants } from './wellnessCopy.js';
 import {
@@ -924,11 +925,19 @@ async function attachShownEvent(client, userId, recommendation, preferences) {
 export async function getAdaptiveNudgeRecommendations(
   client,
   userId,
-  { limit = 3, recordShown = false, endDate, useAi = false, locale = 'en', selectionMode = 'default', excludeActionIds = [] } = {}
+  { limit = 3, recordShown = false, endDate, useAi = false, locale = 'en', selectionMode = 'default', excludeActionIds = [], persistLatest = false } = {}
 ) {
   const normalizedLimit = boundedLimit(limit);
   const summary = await getBurnoutPatternSummary(client, userId, { endDate });
   const recentEvents = await loadRecentNudgeEvents(client, userId);
+  if (persistLatest && selectionMode === 'default') {
+    const current = currentSmartNudge(recentEvents, { locale });
+    if (current) return {
+      summary: localizeAdaptiveSummary(summary, locale),
+      selection: { status: 'available', can_revisit: false },
+      recommendations: [current]
+    };
+  }
   const preferences = await loadNudgeThrottlePreferences(client, userId);
   const personalization = await loadNudgePersonalizationProfile(client, userId);
   const stateDriven = stateRecommendation(summary);
