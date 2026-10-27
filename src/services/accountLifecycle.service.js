@@ -21,6 +21,7 @@ export const ACCOUNT_LIFECYCLE_CODES = Object.freeze({
 // such as nutrition_log_items, are removed by their ON DELETE CASCADE.
 export const USER_OWNED_TABLES = Object.freeze([
   'ai_nudge_generations',
+  'check_in_presets',
   'streak_protected_days',
   'burnout_score_history',
   'auth_email_tokens',

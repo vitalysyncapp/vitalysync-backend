@@ -5,6 +5,12 @@ import {
   getUnifiedCheckInStatus,
   saveUnifiedCheckIn
 } from '../controllers/checkIn.controller.js';
+import {
+  createCheckInPresetHandler,
+  deleteCheckInPresetHandler,
+  getCheckInPresets,
+  updateCheckInPresetHandler,
+} from '../controllers/checkInPreset.controller.js';
 
 import {
   getCurrentStreak,
@@ -17,6 +23,11 @@ import {
 } from '../controllers/log.controller.js';
 
 const router = express.Router();
+
+router.get('/check-in-presets', getCheckInPresets);
+router.post('/check-in-presets', createCheckInPresetHandler);
+router.put('/check-in-presets/:presetId', updateCheckInPresetHandler);
+router.delete('/check-in-presets/:presetId', deleteCheckInPresetHandler);
 
 router.get('/weekly-assessment', getWeeklyAssessment);
 router.post('/weekly-assessment', saveWeeklyAssessment);
