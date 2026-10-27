@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  CHECK_IN_PRESET_AVATAR_IDS,
   createCheckInPreset,
   deleteCheckInPreset,
   listCheckInPresets,
@@ -46,6 +47,19 @@ const weeklyDailyAnswers = Object.fromEntries(
 const weeklyAnswers = Object.fromEntries(
   WEEKLY_BURNOUT_QUESTIONS.map((question) => [question.question_key, 3])
 );
+
+test('all illustrated avatar choices are accepted for saving presets', () => {
+  assert.equal(CHECK_IN_PRESET_AVATAR_IDS.length, 36);
+  for (const avatarId of CHECK_IN_PRESET_AVATAR_IDS) {
+    const preset = normalizeCheckInPresetPayload({
+      name: 'My day',
+      check_in_type: 'daily',
+      avatar_id: avatarId,
+      daily: dailyAnswers,
+    });
+    assert.equal(preset.avatar_id, avatarId);
+  }
+});
 
 test('preset payloads reuse complete daily and weekly questionnaire validation', () => {
   const daily = normalizeCheckInPresetPayload({
