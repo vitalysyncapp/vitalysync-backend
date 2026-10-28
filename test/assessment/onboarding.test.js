@@ -1,0 +1,714 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  OnboardingServiceError,
+  calculateBmi,
+  getOnboardingSummaryBundle,
+  normalizeBodyMetrics,
+  submitRequiredOnboarding,
+  updateUserBurnoutBaseline,
+  updateUserWellnessProfile,
+} from '../../src/services/onboarding.service.js';
+import { startBaselineEpoch } from '../../src/services/baselineEpochService.js';
+import pool from '../../src/config/db.js';
+import { BURNOUT_QUESTIONS, BURNOUT_QUESTIONNAIRE_VERSION, LEGACY_BASELINE_VERSION, WEEKLY_QUESTIONNAIRE_VERSION } from '../../src/services/burnoutQuestionnaire.js';
+
+const burnoutQuestionKeys = [
+  'ee_01',
+  'ee_02',
+  'ee_03',
+  'ee_04',
+  'ee_05',
+  'dp_01',
+  'dp_02',
+  'dp_03',
+  'dp_04',
+  'dp_05',
+  'pa_01',
+  'pa_02',
+  'pa_03',
+  'pa_04',
+  'pa_05',
+];
+
+function baselineAnswers(value = 3, version = LEGACY_BASELINE_VERSION) {
+  const keys = version === BURNOUT_QUESTIONNAIRE_VERSION
+    ? BURNOUT_QUESTIONS.map((question) => question.question_key) : burnoutQuestionKeys;
+  return keys.map((questionKey) => ({
+    question_key: questionKey,
+    numeric_value: value,
+  }));
+}
+
+test('onboarding rejects invalid user ids before database work', async () => {
+  await assert.rejects(
+    () => submitRequiredOnboarding({ user_id: 0 }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'Valid user_id is required'
+  );
+});
+
+test('onboarding rejects incomplete profile values before database work', async () => {
+  await assert.rejects(
+    () =>
+      submitRequiredOnboarding({
+        user_id: 1,
+        profile: {
+          role: 'Invalid role',
+          lifestyle_type: 'Sedentary',
+          wellness_goal: 'Improve sleep',
+          height_cm: 170,
+          weight_kg: 70,
+          usual_sleep_time: '22:00',
+          usual_wake_time: '06:00',
+          exercise_goal_days: '3-4 days',
+          has_extra_responsibilities: false,
+        },
+        burnout_answers: [],
+      }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'Invalid role value'
+  );
+});
+
+test('onboarding rejects unsupported wellness goal selections before database work', async () => {
+  await assert.rejects(
+    () =>
+      submitRequiredOnboarding({
+        user_id: 1,
+        profile: {
+          role: 'Student',
+          lifestyle_type: 'Sedentary',
+          wellness_goals: ['Improve sleep', 'Unsupported goal'],
+          height_cm: 170,
+          weight_kg: 70,
+          usual_sleep_time: '22:00',
+          usual_wake_time: '06:00',
+          exercise_goal_days: '3-4 days',
+          workload_level: 3,
+          has_extra_responsibilities: false,
+        },
+        burnout_answers: [],
+      }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'Invalid wellness_goal value'
+  );
+});
+
+test('onboarding requires body metrics before database work', async () => {
+  await assert.rejects(
+    () =>
+      submitRequiredOnboarding({
+        user_id: 1,
+        profile: {
+          role: 'Student',
+          lifestyle_type: 'Sedentary',
+          wellness_goal: 'Improve sleep',
+          usual_sleep_time: '22:00',
+          usual_wake_time: '06:00',
+          exercise_goal_days: '3-4 days',
+          workload_level: 3,
+          has_extra_responsibilities: false,
+        },
+        burnout_answers: [],
+      }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'Valid height_cm is required'
+  );
+});
+
+test('onboarding rejects unreasonable body metrics before database work', async () => {
+  await assert.rejects(
+    () =>
+      submitRequiredOnboarding({
+        user_id: 1,
+        profile: {
+          role: 'Student',
+          lifestyle_type: 'Sedentary',
+          wellness_goal: 'Improve sleep',
+          height_cm: 80,
+          weight_kg: 70,
+          usual_sleep_time: '22:00',
+          usual_wake_time: '06:00',
+          exercise_goal_days: '3-4 days',
+          workload_level: 3,
+          has_extra_responsibilities: false,
+        },
+        burnout_answers: [],
+      }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'height_cm must be between 100 and 250'
+  );
+});
+
+test('body metrics calculate BMI on the backend and ignore submitted BMI', () => {
+  assert.equal(calculateBmi(180, 80), 24.7);
+  assert.equal(calculateBmi(160, 80), 31.3);
+
+  assert.deepEqual(
+    normalizeBodyMetrics({
+      height_cm: '180',
+      weight_kg: '80',
+      bmi: 10,
+    }, { required: true }),
+    {
+      height_cm: 180,
+      weight_kg: 80,
+      bmi: 24.7,
+      provided: true,
+    }
+  );
+});
+
+test('onboarding summary exposes email verification state', async () => {
+  const originalQuery = pool.query;
+  const queries = [];
+
+  pool.query = async (text, values = []) => {
+    queries.push({ text, values });
+
+    if (text.includes('FROM users')) {
+      return {
+        rowCount: 1,
+        rows: [
+          {
+            user_id: 1,
+            email_verified: true,
+            onboarding_completed: true,
+            onboarding_completed_at: new Date('2026-07-23T00:00:00.000Z'),
+            has_onboarding_profile: true,
+          },
+        ],
+      };
+    }
+
+    if (
+      text.includes('FROM user_onboarding_profiles') ||
+      text.includes('FROM user_onboarding_answers')
+    ) {
+      return { rowCount: 0, rows: [] };
+    }
+
+    throw new Error(`Unexpected query: ${text}`);
+  };
+
+  try {
+    const summary = await getOnboardingSummaryBundle(1);
+
+    assert.equal(summary.email_verified, true);
+    assert.ok(queries[0].text.includes('users.email_verified'));
+  } finally {
+    pool.query = originalQuery;
+  }
+});
+
+for (const version of [LEGACY_BASELINE_VERSION, BURNOUT_QUESTIONNAIRE_VERSION])
+test(`onboarding persists server-calculated body metrics and ${version}`, async () => {
+  const originalConnect = pool.connect;
+  const queries = [];
+  const fakeClient = {
+    async query(text, values = []) {
+      queries.push({ text, values });
+
+      if (text === 'BEGIN' || text === 'COMMIT') {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('FROM users') && text.includes('FOR UPDATE')) {
+        return {
+          rowCount: 1,
+          rows: [{ user_id: 1, age: 30, gender: 'Other' }],
+        };
+      }
+
+      if (text.includes('INSERT INTO user_onboarding_profiles')) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              user_id: 1,
+              role: 'Student',
+              lifestyle_type: 'Sedentary',
+              wellness_goal: 'Improve sleep',
+              wellness_goals: ['Improve sleep'],
+              height_cm: 180,
+              weight_kg: 80,
+              bmi: 24.7,
+              burnout_questionnaire_version: values[19],
+            },
+          ],
+        };
+      }
+
+      if (
+        text.includes('INSERT INTO user_onboarding_answers') ||
+        text.includes('UPDATE users') ||
+        text.includes('INSERT INTO user_preferences') ||
+        text.includes('INSERT INTO user_goals') ||
+        text.includes('INSERT INTO user_onboarding (')
+      ) {
+        return { rowCount: 1, rows: [] };
+      }
+
+      if (text.includes('FROM user_baseline_epochs')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('INSERT INTO user_baseline_epochs')) {
+        return {
+          rowCount: 1,
+          rows: [{
+            baseline_epoch_id: 1,
+            user_id: 1,
+            started_at: '2026-07-28',
+            ended_at: null,
+            reset_reason: 'initial_onboarding',
+          }],
+        };
+      }
+
+      throw new Error(`Unexpected query: ${text}`);
+    },
+    release() {},
+  };
+
+  pool.connect = async () => fakeClient;
+
+  try {
+    const response = await submitRequiredOnboarding({
+      user_id: 1,
+      profile: {
+        role: 'Student',
+        lifestyle_type: 'Sedentary',
+        wellness_goal: 'Improve sleep',
+        height_cm: 180,
+        weight_kg: 80,
+        bmi: 10,
+        usual_sleep_time: '22:00',
+        usual_wake_time: '06:00',
+        exercise_goal_days: '3-4 days',
+        workload_level: 3,
+        has_extra_responsibilities: false,
+      },
+      burnout_answers: baselineAnswers(3, version),
+      questionnaire_version: version,
+    });
+
+    const profileInsert = queries.find((query) =>
+      query.text.includes('INSERT INTO user_onboarding_profiles')
+    );
+    const legacyInsert = queries.find((query) =>
+      query.text.includes('INSERT INTO user_onboarding (')
+    );
+    const nutritionGoalInsert = queries.find(
+      (query) =>
+        query.text.includes('INSERT INTO user_goals') &&
+        query.values[1] === 'nutrition_calories'
+    );
+
+    assert.deepEqual(profileInsert.values.slice(16, 19), [180, 80, 24.7]);
+    assert.equal(profileInsert.values[19], version);
+    assert.equal(response.profile.burnout_questionnaire_version, version);
+    assert.deepEqual(legacyInsert.values.slice(-3), [180, 80, 24.7]);
+    assert.deepEqual(nutritionGoalInsert.values.slice(0, 5), [
+      1,
+      'nutrition_calories',
+      2300,
+      'kcal',
+      'system_default',
+    ]);
+    assert.deepEqual(JSON.parse(nutritionGoalInsert.values[5]), {
+      balanced_kcal: 2300,
+      balanced_kcal_source: 'wellness_profile',
+      calculation_basis: 'age_height_weight_bmi_lifestyle',
+    });
+    assert.equal(response.profile.bmi, 24.7);
+  } finally {
+    pool.connect = originalConnect;
+  }
+});
+
+test('wellness profile metric updates merge stored values and refresh the system goal', async () => {
+  const originalConnect = pool.connect;
+  const queries = [];
+  const fakeClient = {
+    async query(text, values = []) {
+      queries.push({ text, values });
+
+      if (text === 'BEGIN' || text === 'COMMIT') {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('FROM users') && text.includes('FOR UPDATE')) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              user_id: 1,
+              age: 30,
+              gender: 'Other',
+              wellness_goal: 'Improve sleep',
+              wellness_goals: ['Improve sleep'],
+            },
+          ],
+        };
+      }
+
+      if (
+        text.includes('FROM user_onboarding_profiles') &&
+        text.includes('FOR UPDATE')
+      ) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              wellness_goal: 'Improve sleep',
+              wellness_goals: ['Improve sleep'],
+              height_cm: '180',
+              weight_kg: '80',
+              bmi: '24.7',
+              exercise_goal_days: '3-4 days',
+              has_extra_responsibilities: false,
+            },
+          ],
+        };
+      }
+
+      if (text.includes('INSERT INTO user_onboarding_profiles')) {
+        return {
+          rowCount: 1,
+          rows: [
+            {
+              user_id: 1,
+              role: 'Student',
+              lifestyle_type: 'Sedentary',
+              wellness_goal: 'Improve sleep',
+              wellness_goals: ['Improve sleep'],
+              height_cm: values.at(-3),
+              weight_kg: values.at(-2),
+              bmi: values.at(-1),
+              usual_sleep_time: '22:00',
+              usual_wake_time: '06:00',
+              workload_level: 3,
+            },
+          ],
+        };
+      }
+
+      if (
+        text.includes('INSERT INTO user_goals') ||
+        text.includes('UPDATE users') ||
+        text.includes('INSERT INTO user_preferences') ||
+        text.includes('INSERT INTO user_onboarding (') ||
+        text.includes('INSERT INTO user_onboarding_answers')
+      ) {
+        return { rowCount: 1, rows: [] };
+      }
+
+      throw new Error(`Unexpected query: ${text}`);
+    },
+    release() {},
+  };
+
+  pool.connect = async () => fakeClient;
+
+  try {
+    const response = await updateUserWellnessProfile(1, {
+      role: 'Student',
+      lifestyle_type: 'Sedentary',
+      usual_sleep_time: '22:00',
+      usual_wake_time: '06:00',
+      workload_level: 3,
+      height_cm: 160,
+    });
+
+    const profileInsert = queries.find((query) =>
+      query.text.includes('INSERT INTO user_onboarding_profiles')
+    );
+    const nutritionGoalUpsert = queries.find(
+      (query) =>
+        query.text.includes('INSERT INTO user_goals') &&
+        query.values[1] === 'nutrition_calories'
+    );
+    const answerUpdates = queries.filter((query) =>
+      query.text.includes('INSERT INTO user_onboarding_answers')
+    );
+
+    assert.deepEqual(profileInsert.values.slice(-3), [160, 80, 31.3]);
+    assert.deepEqual(nutritionGoalUpsert.values.slice(0, 5), [
+      1,
+      'nutrition_calories',
+      2150,
+      'kcal',
+      'system_default',
+    ]);
+    assert.deepEqual(JSON.parse(nutritionGoalUpsert.values[5]), {
+      balanced_kcal: 2150,
+      balanced_kcal_source: 'wellness_profile',
+      calculation_basis: 'age_height_weight_bmi_lifestyle',
+    });
+    assert.ok(
+      answerUpdates.some(
+        (query) => query.values[1] === 'height_cm' && query.values[4] === '160'
+      )
+    );
+    assert.ok(
+      answerUpdates.some(
+        (query) => query.values[1] === 'weight_kg' && query.values[4] === '80'
+      )
+    );
+    assert.equal(response.profile.bmi, 31.3);
+  } finally {
+    pool.connect = originalConnect;
+  }
+});
+
+test('burnout baseline retake rejects invalid user ids before database work', async () => {
+  await assert.rejects(
+    () => updateUserBurnoutBaseline(0, { burnout_answers: baselineAnswers() }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'Valid user_id is required'
+  );
+});
+
+test('burnout baseline retake requires all dimension answers', async () => {
+  await assert.rejects(
+    () => updateUserBurnoutBaseline(1, { burnout_answers: [] }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'ee_01 must be from 1 to 5'
+  );
+});
+
+test('burnout baseline retake rejects invalid Likert values', async () => {
+  const answers = baselineAnswers();
+  answers[0] = { question_key: 'ee_01', numeric_value: 6 };
+
+  await assert.rejects(
+    () =>
+      updateUserBurnoutBaseline(1, {
+        burnout_answers: answers,
+      }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'ee_01 must be from 1 to 5'
+  );
+});
+
+test('burnout baseline retake rejects an impossible local baseline date', async () => {
+  await assert.rejects(
+    () => updateUserBurnoutBaseline(1, {
+      burnout_answers: baselineAnswers(),
+      baseline_date: '2026-02-30'
+    }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'Valid baseline_date is required'
+  );
+});
+
+test('burnout baseline retake rejects invalid refresh identifiers', async () => {
+  await assert.rejects(
+    () => updateUserBurnoutBaseline(1, {
+      burnout_answers: baselineAnswers(),
+      client_refresh_id: 'bad id'
+    }),
+    (error) =>
+      error instanceof OnboardingServiceError &&
+      error.message === 'Valid client_refresh_id is required'
+  );
+});
+
+test('baseline epoch creation reuses an existing client refresh', async () => {
+  const queries = [];
+  const client = {
+    async query(text, values) {
+      queries.push({ text, values });
+      return {
+        rowCount: 1,
+        rows: [{
+          baseline_epoch_id: 8,
+          user_id: 1,
+          started_at: '2026-07-28',
+          ended_at: null,
+          reset_reason: 'thirty_day_return',
+          client_refresh_id: 'refresh_20260728_abc'
+        }]
+      };
+    }
+  };
+
+  const epoch = await startBaselineEpoch(client, 1, {
+    startedAt: '2026-07-28',
+    resetReason: 'thirty_day_return',
+    clientRefreshId: 'refresh_20260728_abc'
+  });
+
+  assert.equal(epoch.baselineEpochId, 8);
+  assert.equal(epoch.clientRefreshId, 'refresh_20260728_abc');
+  assert.equal(queries.length, 1);
+  assert.match(queries[0].text, /client_refresh_id = \$2/);
+});
+
+test('burnout baseline retake rejects users without onboarding profiles', async () => {
+  const originalConnect = pool.connect;
+  const queries = [];
+  const fakeClient = {
+    async query(text) {
+      queries.push(text);
+
+      if (text === 'BEGIN' || text === 'ROLLBACK') {
+        return { rowCount: 0, rows: [] };
+      }
+
+      if (text.includes('SELECT user_id FROM users')) {
+        return { rowCount: 1, rows: [{ user_id: 1 }] };
+      }
+
+      if (text.includes('UPDATE user_onboarding_profiles')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      throw new Error(`Unexpected query: ${text}`);
+    },
+    release() {},
+  };
+
+  pool.connect = async () => fakeClient;
+
+  try {
+    await assert.rejects(
+      () =>
+        updateUserBurnoutBaseline(1, {
+          burnout_answers: baselineAnswers(),
+        }),
+      (error) =>
+        error instanceof OnboardingServiceError &&
+        error.message === 'Onboarding profile not found' &&
+        error.statusCode === 404
+    );
+  } finally {
+    pool.connect = originalConnect;
+  }
+
+  assert.ok(queries.includes('ROLLBACK'));
+});
+
+test('weekly eleven-item form cannot replace the baseline', async () => {
+  await assert.rejects(updateUserBurnoutBaseline(1, {
+    questionnaire_version: WEEKLY_QUESTIONNAIRE_VERSION,
+    burnout_answers: []
+  }), /baseline requires the 22-item questionnaire/);
+});
+
+for (const version of [LEGACY_BASELINE_VERSION, BURNOUT_QUESTIONNAIRE_VERSION])
+test(`thirty-day baseline refresh persists ${version} and starts a new epoch`, async () => {
+  const originalConnect = pool.connect;
+  const queries = [];
+  const fakeClient = {
+    async query(text, values = []) {
+      const normalized = text.replace(/\s+/g, ' ').trim();
+      queries.push({ text: normalized, values });
+
+      if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(normalized)) {
+        return { rowCount: 0, rows: [] };
+      }
+      if (normalized.includes('SELECT user_id FROM users') && normalized.includes('FOR UPDATE')) {
+        return { rowCount: 1, rows: [{ user_id: 1 }] };
+      }
+      if (normalized.startsWith('UPDATE user_onboarding_profiles')) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: 1,
+            user_id: 1,
+            initial_burnout_score: 35,
+            initial_burnout_level: 'Moderate',
+            burnout_questionnaire_version: values[6]
+          }]
+        };
+      }
+      if (normalized.startsWith('SELECT (SELECT MAX(log_date)')) {
+        return {
+          rowCount: 1,
+          rows: [{
+            last_logged_date: '2026-06-01',
+            baseline_epoch_started_at: '2026-05-01'
+          }]
+        };
+      }
+      if (normalized.startsWith('INSERT INTO user_onboarding_answers')) {
+        return { rowCount: 1, rows: [] };
+      }
+      if (
+        normalized.includes('FROM user_baseline_epochs') &&
+        normalized.includes('FOR UPDATE')
+      ) {
+        return {
+          rowCount: 1,
+          rows: [{
+            baseline_epoch_id: 1,
+            user_id: 1,
+            started_at: '2026-05-01',
+            ended_at: null,
+            reset_reason: 'initial_onboarding'
+          }]
+        };
+      }
+      if (normalized.startsWith('UPDATE user_baseline_epochs')) {
+        return { rowCount: 1, rows: [] };
+      }
+      if (normalized.startsWith('INSERT INTO user_baseline_epochs')) {
+        return {
+          rowCount: 1,
+          rows: [{
+            baseline_epoch_id: 2,
+            user_id: 1,
+            started_at: '2026-07-28',
+            ended_at: null,
+            reset_reason: 'thirty_day_return'
+          }]
+        };
+      }
+      if (normalized === 'SELECT log_date FROM daily_logs WHERE user_id = $1 AND log_date BETWEEN $2 AND $3 ORDER BY log_date ASC') {
+        return { rowCount: 0, rows: [] };
+      }
+      if (normalized.includes('FROM burnout_score_history')) {
+        return { rowCount: 0, rows: [] };
+      }
+
+      throw new Error(`Unexpected query: ${normalized}`);
+    },
+    release() {}
+  };
+
+  pool.connect = async () => fakeClient;
+
+  try {
+    const response = await updateUserBurnoutBaseline(1, {
+      burnout_answers: baselineAnswers(3, version),
+      questionnaire_version: version
+    });
+
+    assert.equal(response.baseline_epoch_id, 2);
+    assert.equal(response.profile.burnout_questionnaire_version, version);
+    assert.equal(queries.find(({ text }) => text.startsWith('UPDATE user_onboarding_profiles')).values[6], version);
+    assert.equal(response.baseline_refresh_reason, 'thirty_day_return');
+    assert.equal(response.latest_score, null);
+    assert.ok(queries.some(({ text }) =>
+      text.startsWith('UPDATE user_baseline_epochs')
+    ));
+    assert.ok(queries.some(({ text }) =>
+      text.startsWith('INSERT INTO user_baseline_epochs')
+    ));
+  } finally {
+    pool.connect = originalConnect;
+  }
+});
